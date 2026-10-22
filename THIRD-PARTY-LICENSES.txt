@@ -1,0 +1,19 @@
+DA Timer includes the following third-party components for direct
+Stream Deck support:
+
+1. python-elgato-streamdeck (folder: vendor\StreamDeck)
+   Copyright (c) Dean Camera. MIT License - see vendor\LICENSE.
+   https://github.com/abcminiuser/python-elgato-streamdeck
+
+2. HIDAPI (file: hidapi.dll, version 0.14.0, 64-bit Windows build)
+   Copyright (c) Alan Ott, Signal 11 Software and the libusb/hidapi
+   contributors. Used under the HIDAPI license (BSD-style option).
+   https://github.com/libusb/hidapi
+
+3. Fonts (folder: fonts) - "DA Sans" and "DA Clock"
+   Modified versions of Barlow (Copyright 2017 The Barlow Project
+   Authors, https://github.com/jpt/barlow), renamed and changed to use
+   tabular figures. SIL Open Font License 1.1 - see fonts\OFL.txt.
+
+Elgato and Stream Deck are trademarks of Corsair Memory, Inc.
+DA Timer is not affiliated with or endorsed by Elgato.

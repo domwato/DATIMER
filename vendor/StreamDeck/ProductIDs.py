@@ -1,0 +1,39 @@
+#         Python Stream Deck Library
+#      Released under the MIT license
+#
+#   dean [at] fourwalledcubicle [dot] com
+#         www.fourwalledcubicle.com
+#
+
+
+class USBVendorIDs:
+    """
+    USB Vendor IDs for known StreamDeck devices.
+    """
+
+    USB_VID_ELGATO = 0x0FD9
+
+
+class USBProductIDs:
+    """
+    USB Product IDs for known StreamDeck devices.
+    """
+
+    USB_PID_STREAMDECK_MINI = 0x0063
+    USB_PID_STREAMDECK_MINI_DISCORD = 0x00B3
+    USB_PID_STREAMDECK_MINI_MK2 = 0x0090
+    USB_PID_STREAMDECK_MINI_MK2_MODULE = 0x00B8
+    USB_PID_STREAMDECK_MK2 = 0x0080
+    USB_PID_STREAMDECK_MK2_MODULE = 0x00B9
+    USB_PID_STREAMDECK_MK2_SCISSOR = 0x00A5
+    USB_PID_STREAMDECK_MK2_V2 = 0x00B9
+    USB_PID_STREAMDECK_NEO = 0x009A
+    USB_PID_STREAMDECK_ORIGINAL = 0x0060
+    USB_PID_STREAMDECK_ORIGINAL_V2 = 0x006D
+    USB_PID_STREAMDECK_PEDAL = 0x0086
+    USB_PID_STREAMDECK_PLUS = 0x0084
+    USB_PID_STREAMDECK_XL = 0x006C
+    USB_PID_STREAMDECK_XL_V2 = 0x008F
+    USB_PID_STREAMDECK_STUDIO = 0x00AA
+    USB_PID_STREAMDECK_XL_V2_MODULE = 0x00BA
+    USB_PID_STREAMDECK_PLUS_XL = 0x00C6

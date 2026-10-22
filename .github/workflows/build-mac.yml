@@ -1,0 +1,49 @@
+# Builds the Mac version of DA Timer on GitHub's Mac machines.
+# Push this folder to a GitHub repo, then: Actions tab -> "Build Mac app"
+# -> Run workflow. Download the zips from the finished run's "Artifacts".
+name: Build Mac app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15          # Apple silicon (M1 and later)
+            arch: apple-silicon
+          - runner: macos-15-intel    # older Intel Macs
+            arch: intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: |
+          brew install hidapi
+          cp "$(brew --prefix hidapi)/lib/libhidapi.dylib" ./libhidapi.dylib
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller pillow openpyxl numpy sounddevice pyobjc-framework-Cocoa
+
+      - name: Check tkinter works
+        run: python -c "import tkinter; print('Tk', tkinter.TkVersion)"
+
+      - name: Build DA Timer.app
+        run: pyinstaller --noconfirm mac/DA_Timer_mac.spec
+
+      - name: Zip it
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent "DA Timer.app" "DA-Timer-mac-${{ matrix.arch }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DA-Timer-mac-${{ matrix.arch }}
+          path: dist/DA-Timer-mac-${{ matrix.arch }}.zip

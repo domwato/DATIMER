@@ -1,0 +1,48 @@
+DA TIMER ON A MAC
+=================
+
+You can't build a Mac app on Windows (PyInstaller only builds for the
+computer it runs on), so GitHub's free Mac machines build it for you.
+
+ONE-OFF SETUP (about 10 minutes, all in a web browser)
+1. Sign in at github.com (a free account is fine).
+2. Top right "+" -> New repository. Name it e.g. da-timer, choose
+   Private, tick "Add a README file", Create repository.
+3. Click "Add file" -> "Upload files". Drag in EVERYTHING inside this
+   Python folder (including the hidden-looking ".github" and "mac"
+   folders). Click "Commit changes".
+   - If the .github folder doesn't upload: "Add file" -> "Create new file",
+     type the name  .github/workflows/build-mac.yml  and paste the
+     contents of that file from this folder.
+
+BUILD THE APP (each time you update DA Timer)
+4. Open the "Actions" tab -> "Build Mac app" -> "Run workflow".
+5. Wait ~5-10 minutes for the green tick, open the run, and download
+   from "Artifacts" at the bottom:
+     DA-Timer-mac-apple-silicon   M1/M2/M3/M4 Macs (2020 onwards)
+     DA-Timer-mac-intel           older Intel Macs
+6. Unzip it twice (GitHub zips the zip) to get "DA Timer.app".
+
+FIRST LAUNCH ON THE MAC
+The app isn't signed with an Apple developer certificate, so macOS will
+block it the first time:
+ - Double-click it, click Done/OK on the warning.
+ - System Settings -> Privacy & Security -> scroll down -> "Open Anyway".
+ (Or in Terminal:  xattr -dr com.apple.quarantine "/Applications/DA Timer.app")
+After that it opens normally.
+
+Using LTC timecode: macOS asks for microphone permission the first time -
+allow it, because the timecode comes in through an audio input.
+
+RUNNING FROM SOURCE INSTEAD (no build needed)
+Install Python 3.12 from python.org/downloads/macos, then double-click
+"Run DA Timer.command" (first time: right-click -> Open). If it opens
+in a text editor instead, run this once in Terminal from this folder:
+    chmod +x "Run DA Timer.command"
+For the Stream Deck over USB from source you also need:  brew install hidapi
+
+MAC DIFFERENCES
+ - Shortcuts use Cmd instead of Ctrl (Cmd+Z undo, Cmd+, settings,
+   Cmd+M mark). Cmd+Q asks the same questions as Exit.
+ - Shows, settings and logs live in ~/Library/Application Support/DATimer.
+ - The Elgato Stream Deck plugin works on Mac too (same .streamDeckPlugin).

@@ -1,0 +1,18 @@
+{
+  "name": "datimer-streamdeck",
+  "version": "1.0.0",
+  "description": "DA Timer Stream Deck plugin",
+  "main": "index.js",
+  "scripts": {
+    "build": "esbuild src/plugin.js --bundle --platform=node --target=node20 --format=cjs --outfile=com.gravitymedia.datimer.sdPlugin/bin/plugin.js",
+    "pack": "npm run build && streamdeck pack com.gravitymedia.datimer.sdPlugin --output dist --force"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@elgato/cli": "^1.10.2",
+    "esbuild": "^0.28.2",
+    "ws": "^8.22.0"
+  }
+}

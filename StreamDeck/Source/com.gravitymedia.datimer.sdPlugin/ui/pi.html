@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>DA Timer</title>
+<style>
+  :root { --bg: #2d2d2d; --field: #3d3d3d; --text: #d8d8d8; --muted: #969696;
+          --cyan: #00e5f0; --red: #ff6b79; --green: #2ed38a; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+               font: 9pt "Segoe UI", -apple-system, sans-serif; }
+  .wrap { padding: 8px 12px 12px 0; }
+  .row { display: flex; align-items: center; min-height: 32px; margin: 2px 0; }
+  .row label { flex: 0 0 96px; text-align: right; padding-right: 12px;
+               color: var(--muted); }
+  .row .ctl { flex: 1; }
+  select, input[type=text] { width: 100%; box-sizing: border-box; height: 26px;
+               background: var(--field); color: var(--text); border: 0;
+               border-radius: 3px; padding: 0 6px; font: inherit; outline: none; }
+  select:focus, input:focus { box-shadow: 0 0 0 1px var(--cyan); }
+  button { background: var(--field); color: var(--text); border: 0;
+           border-radius: 3px; height: 26px; padding: 0 12px; font: inherit;
+           cursor: pointer; }
+  button:hover { box-shadow: 0 0 0 1px var(--cyan); }
+  .note { color: var(--muted); padding-left: 108px; margin: 2px 0 6px;
+          line-height: 1.4; }
+  .ok { color: var(--green); } .bad { color: var(--red); }
+  .hdr { color: var(--cyan); font-weight: 700; letter-spacing: .06em;
+         padding-left: 108px; margin: 10px 0 4px; font-size: 8pt; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="clock" class="hidden">
+    <div class="row"><label>Shows</label><div class="ctl">
+      <select id="source">
+        <option value="segment">Segment time</option>
+        <option value="program">Program time</option>
+        <option value="seg_delta">Segment over / under</option>
+        <option value="prog_delta">Total over / under</option>
+        <option value="to_out">Time to hard out</option>
+        <option value="backtime">Back-time: cut / spare</option>
+        <option value="tod">Time of day (TOD)</option>
+      </select></div></div>
+    <div class="row"><label>Key press</label><div class="ctl">
+      <select id="press">
+        <option value="toggle">Start / stop that timer</option>
+        <option value="next">Next segment</option>
+        <option value="mark">Log a MARK</option>
+        <option value="none">Nothing (display only)</option>
+      </select></div></div>
+  </div>
+
+  <div id="display" class="hidden">
+    <div class="row"><label>Toggles</label><div class="ctl">
+      <select id="target">
+        <option value="dual">Dual screen output</option>
+        <option value="tod">TOD clock</option>
+        <option value="log">Log panel</option>
+        <option value="segments">Segments panel</option>
+      </select></div></div>
+  </div>
+
+  <div id="help" class="note"></div>
+
+  <div class="hdr">CONNECTION</div>
+  <div class="row"><label>DA Timer</label><div class="ctl">
+    <input id="host" type="text" placeholder="127.0.0.1:47800" /></div></div>
+  <div class="row"><label></label><div class="ctl">
+    <button id="test">Test connection</button></div></div>
+  <div id="result" class="note"></div>
+</div>
+
+<script>
+  const HELP = {
+    clock: "Live clock on the key. Colours follow DA Timer: amber in the last 15 seconds of a segment goal, red when over.",
+    alltoggle: "Starts both timers, or stops both if they're running.",
+    allstart: "Starts both timers. Lights green while both are running.",
+    allstop: "Stops both timers. Lights red while both are stopped.",
+    segtoggle: "Starts / stops the segment timer and shows it live.",
+    progtoggle: "Starts / stops the program timer and shows it live.",
+    next: "Ends the current segment (logging its time) and starts the next one. Shows the next segment's name from your goals.",
+    mark: "Drops a timestamped MARK in the DA Timer log.",
+    reset: "Hold for 1 second to reset the program (both timers and the segment list). A quick tap does nothing.",
+    display: "Turns a DA Timer display option on or off. Lights cyan when on.",
+    undo: "Undoes the last action in DA Timer (reset, next segment, stop/start, preset). The clocks carry on as if it never happened."
+  };
+  let ws, uuid, actionInfo, settings = {}, globals = {};
+
+  function $(id) { return document.getElementById(id); }
+  function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+  function saveSettings() { send({ event: "setSettings", context: uuid, payload: settings }); }
+  function saveGlobals() {
+    send({ event: "setGlobalSettings", context: uuid, payload: globals });
+    send({ event: "sendToPlugin", action: actionInfo.action, context: uuid,
+           payload: { host: globals.host || "" } });
+  }
+
+  function build() {
+    const kind = actionInfo.action.split(".").pop();
+    if (kind === "clock") {
+      $("clock").classList.remove("hidden");
+      $("source").value = settings.source || "segment";
+      $("press").value = settings.press || "toggle";
+    }
+    if (kind === "display") {
+      $("display").classList.remove("hidden");
+      $("target").value = settings.target || "dual";
+    }
+    $("help").textContent = HELP[kind] || "";
+    ["source", "press", "target"].forEach((id) =>
+      $(id).addEventListener("change", (e) => { settings[id] = e.target.value; saveSettings(); }));
+    $("host").addEventListener("change", (e) => { globals.host = e.target.value.trim(); saveGlobals(); });
+    $("test").addEventListener("click", () => {
+      $("result").textContent = "Checking…"; $("result").className = "note";
+      send({ event: "sendToPlugin", action: actionInfo.action, context: uuid,
+             payload: { test: true, host: $("host").value.trim() } });
+    });
+  }
+
+  // Called by the Stream Deck app when the property inspector opens
+  function connectElgatoStreamDeckSocket(port, inUUID, registerEvent, info, inActionInfo) {
+    uuid = inUUID;
+    actionInfo = JSON.parse(inActionInfo);
+    settings = (actionInfo.payload && actionInfo.payload.settings) || {};
+    ws = new WebSocket("ws://127.0.0.1:" + port);
+    ws.onopen = () => {
+      send({ event: registerEvent, uuid: uuid });
+      send({ event: "getGlobalSettings", context: uuid });
+      build();
+    };
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      if (m.event === "didReceiveGlobalSettings") {
+        globals = (m.payload && m.payload.settings) || {};
+        $("host").value = globals.host || "";
+      } else if (m.event === "sendToPropertyInspector" && m.payload && m.payload.testResult) {
+        $("result").textContent = m.payload.testResult;
+        $("result").className = "note " + (m.payload.ok ? "ok" : "bad");
+      }
+    };
+  }
+</script>
+</body>
+</html>

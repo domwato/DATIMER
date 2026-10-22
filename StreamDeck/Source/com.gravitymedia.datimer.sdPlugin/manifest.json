@@ -1,0 +1,196 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Name": "DA Timer",
+  "Version": "1.2.0.0",
+  "Author": "Gravity Media",
+  "Description": "Control DA Timer from your Stream Deck: start/stop, next segment, marks, and live segment / program clocks with over/under.",
+  "Category": "DA Timer",
+  "CategoryIcon": "imgs/category",
+  "Icon": "imgs/plugin",
+  "UUID": "com.gravitymedia.datimer",
+  "CodePath": "bin/plugin.js",
+  "Nodejs": {
+    "Version": "20"
+  },
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "6.5"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    },
+    {
+      "Platform": "mac",
+      "MinimumVersion": "12"
+    }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.gravitymedia.datimer.clock",
+      "Name": "Live Clock",
+      "Tooltip": "Segment, program, over/under or TOD on a key",
+      "Icon": "imgs/actions/clock",
+      "States": [
+        {
+          "Image": "imgs/keys/clock"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "UUID": "com.gravitymedia.datimer.alltoggle",
+      "Name": "All Start / Stop",
+      "Tooltip": "Toggle both timers",
+      "Icon": "imgs/actions/alltoggle",
+      "States": [
+        {
+          "Image": "imgs/keys/alltoggle"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "UUID": "com.gravitymedia.datimer.allstart",
+      "Name": "All Start",
+      "Tooltip": "Start both timers",
+      "Icon": "imgs/actions/allstart",
+      "States": [
+        {
+          "Image": "imgs/keys/allstart"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "UUID": "com.gravitymedia.datimer.allstop",
+      "Name": "All Stop",
+      "Tooltip": "Stop both timers",
+      "Icon": "imgs/actions/allstop",
+      "States": [
+        {
+          "Image": "imgs/keys/allstop"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "UUID": "com.gravitymedia.datimer.segtoggle",
+      "Name": "Segment Start / Stop",
+      "Tooltip": "Toggle the segment timer",
+      "Icon": "imgs/actions/segtoggle",
+      "States": [
+        {
+          "Image": "imgs/keys/segtoggle"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "UUID": "com.gravitymedia.datimer.progtoggle",
+      "Name": "Program Start / Stop",
+      "Tooltip": "Toggle the program timer",
+      "Icon": "imgs/actions/progtoggle",
+      "States": [
+        {
+          "Image": "imgs/keys/progtoggle"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "UUID": "com.gravitymedia.datimer.next",
+      "Name": "Next Segment",
+      "Tooltip": "End this segment and start the next",
+      "Icon": "imgs/actions/next",
+      "States": [
+        {
+          "Image": "imgs/keys/next"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "UUID": "com.gravitymedia.datimer.mark",
+      "Name": "Log Mark",
+      "Tooltip": "Drop a timestamped MARK in the log",
+      "Icon": "imgs/actions/mark",
+      "States": [
+        {
+          "Image": "imgs/keys/mark"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "UUID": "com.gravitymedia.datimer.reset",
+      "Name": "Reset Program (hold)",
+      "Tooltip": "Hold 1 second to reset the program",
+      "Icon": "imgs/actions/reset",
+      "States": [
+        {
+          "Image": "imgs/keys/reset"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "UUID": "com.gravitymedia.datimer.undo",
+      "Name": "Undo Last Action",
+      "Tooltip": "Undo a reset, next segment, stop/start or preset",
+      "Icon": "imgs/actions/undo",
+      "States": [
+        {
+          "Image": "imgs/keys/undo"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "UUID": "com.gravitymedia.datimer.display",
+      "Name": "Display Toggle",
+      "Tooltip": "Dual screen, TOD, log or segments panel on/off",
+      "Icon": "imgs/actions/display",
+      "States": [
+        {
+          "Image": "imgs/keys/display"
+        }
+      ],
+      "PropertyInspectorPath": "ui/pi.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    }
+  ]
+}
