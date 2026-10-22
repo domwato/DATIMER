@@ -19,9 +19,9 @@ jobs:
             arch: intel
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -38,12 +38,26 @@ jobs:
       - name: Build DA Timer.app
         run: pyinstaller --noconfirm mac/DA_Timer_mac.spec
 
+      - name: Check the app starts
+        run: |
+          export APPDATA="$RUNNER_TEMP/datimer-test"
+          "dist/DA Timer.app/Contents/MacOS/DA Timer" > "$RUNNER_TEMP/app.log" 2>&1 &
+          PID=$!
+          sleep 15
+          cat "$RUNNER_TEMP/app.log"
+          if kill -0 $PID 2>/dev/null; then
+            echo "DA Timer is running - good"; kill $PID
+          else
+            echo "DA Timer quit or crashed on start"; exit 1
+          fi
+          ls -la "dist/DA Timer.app/Contents/Frameworks/libhidapi.dylib"
+
       - name: Zip it
         run: |
           cd dist
           ditto -c -k --sequesterRsrc --keepParent "DA Timer.app" "DA-Timer-mac-${{ matrix.arch }}.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: DA-Timer-mac-${{ matrix.arch }}
           path: dist/DA-Timer-mac-${{ matrix.arch }}.zip
