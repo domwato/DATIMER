@@ -1635,8 +1635,8 @@ class SettingsDialog(tk.Toplevel):
         if self._logo is not None:
             tk.Label(about, image=self._logo, bg=SURFACE).pack(side="left",
                                                                padx=(0, 10))
-        tk.Label(about, text=f"{APP_NAME} v{VERSION}  \u00b7  made by {AUTHOR}"
-                             f"  \u00b7  {COPYRIGHT}", bg=SURFACE, fg=MUTED,
+        tk.Label(about, text=f"{APP_NAME} v{VERSION}  \u00b7  {COPYRIGHT}",
+                 bg=SURFACE, fg=MUTED,
                  font=(UI_FONT, 10)).pack(side="left")
 
         # Interface size (needs a restart - every widget is built at a size)
