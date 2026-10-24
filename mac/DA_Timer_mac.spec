@@ -6,7 +6,7 @@ import sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
-VERSION = "7.7"
+VERSION = "1.0"
 sys.path.insert(0, os.path.join(ROOT, "vendor"))   # vendored StreamDeck lib
 
 datas = [(os.path.join(ROOT, "fonts"), "fonts"),
