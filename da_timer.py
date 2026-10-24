@@ -1275,7 +1275,7 @@ OUTPUT_ELEMENTS = [
     ("seg_status", "Time left / over", 1.1, "auto"),
     ("show_title", "Program name line", 1.4, "accent"),
     ("show_time", "Program clock", 5.0, "fg"),
-    ("clock", "Time of day / timecode", 2.4, "fg"),
+    ("clock", "Time of day / timecode", 3.2, "fg"),
     ("message", "Bottom message", 1.4, "fg"),
 ]
 OUTPUT_DEFAULTS = {e[0]: e for e in OUTPUT_ELEMENTS}
@@ -1352,9 +1352,9 @@ class OutputView(tk.Frame):
                                    family=UI_BOLD)
         self.show_time = FitLabel(self, "00:00:00", text="00:00:00")
         self.message_lbl = FitLabel(self, " ", fill=0.7, family=UI_BOLD)
-        self.clock_cap = FitLabel(self, "TOD", fill=0.6, family=UI_BOLD,
-                                  anchor="e")
-        self.clock_time = FitLabel(self, "00:00:00", fill=0.85, anchor="w")
+        self.clock_cap = FitLabel(self, "TIME OF DAY", fill=0.75,
+                                  family=UI_BOLD)
+        self.clock_time = FitLabel(self, "00:00:00", fill=0.88)
         self.rule = tk.Frame(self, height=2)
         self.clock_mode = "off"
         self.status_colour = ""
@@ -1422,7 +1422,7 @@ class OutputView(tk.Frame):
         if self.clock_mode != "off":
             self.clock_time.set_text(
                 "", "00:00:00:00" if self.clock_mode == "tc" else "00:00:00")
-            self.clock_cap.set_text("TOD", "TOD")
+            self.clock_cap.set_text("TIME OF DAY", longest)
         total = sum(wgt for _, wgt in bands) or 1
         y = 0.0
         for name, wgt in bands:
@@ -1439,10 +1439,11 @@ class OutputView(tk.Frame):
                     self.title_lbl.place(relx=0.02, rely=y, relwidth=0.96,
                                          relheight=h)
             elif name == "clock":
-                self.clock_cap.place(relx=0.02, rely=y, relwidth=0.2,
-                                     relheight=h)
-                self.clock_time.place(relx=0.24, rely=y, relwidth=0.7,
-                                      relheight=h)
+                # caption line above the time, like PROGRAM above its clock
+                self.clock_cap.place(relx=0, rely=y, relwidth=1,
+                                     relheight=h * 0.34)
+                self.clock_time.place(relx=0, rely=y + h * 0.34, relwidth=1,
+                                      relheight=h * 0.66)
             elif name == "message":
                 self.rule.place(relx=0.25, rely=y, relwidth=0.5, height=2)
                 self.message_lbl.place(relx=0, rely=y, relwidth=1,
@@ -1773,7 +1774,7 @@ class OutputLayoutEditor(tk.Toplevel):
             self.app.output_values(self.show)
         self.preview.update_times(seg, show, status or "+00:12 OVER",
                                   col or RED)
-        self.preview.update_extras(caption, ccap or "TOD",
+        self.preview.update_extras(caption, ccap or "TIME OF DAY",
                                    ctext or f"{datetime.now():%H:%M:%S}")
         self.after(250, self._tick)
 
@@ -4453,9 +4454,9 @@ class DATimerApp:
             clk = self.clock
             if mode == "tc" and clk.mode == "ltc" and clk.ltc_tc and \
                     clk.state == "ok":
-                ccap, ctext = "TC", clk.ltc_tc
+                ccap, ctext = "TIMECODE", clk.ltc_tc
             else:
-                ccap, ctext = "TOD", f"{clk.now():%H:%M:%S}"
+                ccap, ctext = "TIME OF DAY", f"{clk.now():%H:%M:%S}"
         return (fmt(self.segment.elapsed()), fmt(self.show.elapsed()),
                 status, col, self._out_seg_caption(show), ccap, ctext)
 
@@ -4492,8 +4493,8 @@ class DATimerApp:
         clk = self.clock
         if mode == "tc" and clk.mode == "ltc" and clk.ltc_tc and \
                 clk.state == "ok":
-            return "TC", clk.ltc_tc
-        return "TOD", f"{clk.now():%H:%M:%S}"
+            return "TIMECODE", clk.ltc_tc
+        return "TIME OF DAY", f"{clk.now():%H:%M:%S}"
 
     def _seg_total(self):
         """Segments in the show: the number set in Goals, else the running
