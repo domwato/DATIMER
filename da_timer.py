@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -3631,7 +3631,7 @@ class DATimerApp:
             except tk.TclError:
                 pass
         if self.feat("fullscreen"):
-            root.after(200, lambda: root.attributes("-fullscreen", True))
+            root.after(200, lambda: self.set_fullscreen(True))
 
         root.after(300, self._startup_output)
         root.after(700, self._offer_restore)
@@ -3817,6 +3817,8 @@ class DATimerApp:
         self.undo_btn = self._tool("Undo", self.undo, "neutral")
         self.settings_btn = self._tool("Settings", self.open_settings,
                                        "neutral")
+        self.full_btn = self._tool("Full screen", self.toggle_fullscreen,
+                                   "ghost")
         self.undo_btn.set_enabled(False)
         self.tool_groups = [(self.undo_btn,),
                             (self.dual_btn, self.screen_btn),
@@ -4078,6 +4080,9 @@ class DATimerApp:
         sw_, sh_ = self.settings_btn.fixed
         sx = ex - px(6) - sw_
         put(self.settings_btn, sx, ty + (tbh - sh_) / 2, sw_, sh_)
+        fw, fh = self.full_btn.fixed
+        sx = sx - px(6) - fw
+        put(self.full_btn, sx, ty + (tbh - fh) / 2, fw, fh)
         # Buttons that don't fit (narrow window) go into a "More" menu
         mw, mh = self.more_btn.fixed
         limit = sx - px(10)
@@ -4292,9 +4297,28 @@ class DATimerApp:
             r.bind("<Command-comma>", lambda e: self.open_settings())
             r.bind("<Command-m>", lambda e: self.add_mark())
         r.bind("<F2>", lambda e: self.focus_note())
-        r.bind("<F11>", lambda e: r.attributes(
-            "-fullscreen", not r.attributes("-fullscreen")))
-        r.bind("<Escape>", lambda e: r.attributes("-fullscreen", False))
+        r.bind("<F11>", lambda e: self.toggle_fullscreen())
+        r.bind("<Escape>", lambda e: None if isinstance(
+            e.widget, (tk.Entry, ttk.Entry, tk.Text))
+            else self.set_fullscreen(False))
+
+    def is_fullscreen(self):
+        try:
+            return bool(int(self.root.attributes("-fullscreen")))
+        except (tk.TclError, ValueError):
+            return False
+
+    def set_fullscreen(self, on):
+        try:
+            self.root.attributes("-fullscreen", bool(on))
+        except tk.TclError:
+            pass
+        # the window manager applies it a moment later
+        self.root.after(150, lambda: self._toggle_look(
+            self.full_btn, self.is_fullscreen()))
+
+    def toggle_fullscreen(self):
+        self.set_fullscreen(not self.is_fullscreen())
 
     def _toggle_look(self, button, on):
         button.set_variant("on" if on else "ghost")
@@ -5058,7 +5082,7 @@ class DATimerApp:
             self.clock.configure(self.settings if value else
                                  dict(self.settings, time_source="pc"))
         elif key == "fullscreen":
-            self.root.attributes("-fullscreen", bool(value))
+            self.set_fullscreen(bool(value))
         elif key == "autosave":
             self._save_show_state()
         elif key in ("undo", "undo_popups") and not value:
