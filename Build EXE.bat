@@ -7,7 +7,9 @@ py -3 -c "import sys" >nul 2>&1 && set "PY=py -3"
 if not defined PY set "PY=python"
 %PY% -m pip install --upgrade pyinstaller pillow openpyxl numpy sounddevice
 %PY% -m PyInstaller --noconfirm --onefile --windowed --name DA_Timer --icon stopwatch.ico ^
+  --version-file version_info.txt ^
   --add-data "stopwatch.ico;." ^
+  --add-data "author_logo.png;." ^
   --add-data "fonts;fonts" ^
   --add-binary "hidapi.dll;." ^
   --paths vendor --collect-submodules StreamDeck ^

@@ -55,9 +55,32 @@ except ImportError:  # Pillow optional
     Image = ImageTk = None
 
 APP_NAME = "DA Timer"
+AUTHOR = "DW"
+CREDIT = f"{APP_NAME} by {AUTHOR}"
+COPYRIGHT = f"\u00a9 2026 {AUTHOR}"
+# The author's logo: author_logo.png next to da_timer.py (bundled into the
+# Windows exe and the Mac app). Shown in Settings and the header.
+AUTHOR_LOGO = "author_logo.png"
+
+
+def author_logo(height):
+    """The author's logo as a Tk image `height` pixels tall, or None."""
+    if Image is None:
+        return None
+    here = os.path.dirname(os.path.abspath(__file__))
+    for d in (getattr(sys, "_MEIPASS", here), here):
+        path = os.path.join(d, AUTHOR_LOGO)
+        if os.path.exists(path):
+            try:
+                im = Image.open(path).convert("RGBA")
+                w = max(1, round(im.width * height / im.height))
+                return ImageTk.PhotoImage(im.resize((w, height), Image.LANCZOS))
+            except Exception:
+                return None
+    return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "7.2"
+VERSION = "7.3"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -1605,6 +1628,17 @@ class SettingsDialog(tk.Toplevel):
         ModernButton.sized(bottom, "Done", self.destroy, SURFACE, "primary",
                            font_px=14, height=38, pad_x=22).pack(side="right")
 
+        # Credit
+        about = tk.Frame(self, bg=SURFACE)
+        about.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(16, 0))
+        self._logo = author_logo(px(22))
+        if self._logo is not None:
+            tk.Label(about, image=self._logo, bg=SURFACE).pack(side="left",
+                                                               padx=(0, 10))
+        tk.Label(about, text=f"{APP_NAME} v{VERSION}  \u00b7  made by {AUTHOR}"
+                             f"  \u00b7  {COPYRIGHT}", bg=SURFACE, fg=MUTED,
+                 font=(UI_FONT, 10)).pack(side="left")
+
         # Interface size (needs a restart - every widget is built at a size)
         size = tk.Frame(bottom, bg=SURFACE)
         size.pack(side="left", padx=(28, 0))
@@ -2513,6 +2547,8 @@ def export_log_xlsx(path, show_name, log, segment_times, plan=None,
     mark_fill = PatternFill("solid", fgColor="FFF2CC")
 
     wb = Workbook()
+    wb.properties.creator = CREDIT
+    wb.properties.lastModifiedBy = CREDIT
     ws = wb.active
     ws.title = "Log"
     entries = log.entries
@@ -2536,7 +2572,8 @@ def export_log_xlsx(path, show_name, log, segment_times, plan=None,
             ("Back-time at export", (backtime or {}).get("verdict", "-"), "@"),
             ("Entries", len(entries), "0"),
             ("Exported", datetime.now().replace(microsecond=0),
-             "dd/mm/yyyy hh:mm:ss")]
+             "dd/mm/yyyy hh:mm:ss"),
+            ("Made with", f"{CREDIT} (v{VERSION})", "@")]
     for i, (label, value, numfmt) in enumerate(meta, start=3):
         ws.cell(row=i, column=1, value=label).font = Font(bold=True)
         ws.merge_cells(start_row=i, start_column=1, end_row=i, end_column=3)
@@ -2882,7 +2919,10 @@ class DATimerApp:
 
         # Header: show logo + name on the left, time of day + company logo
         self.top_logo = LogoLabel(r, bg=SURFACE)
-        self.app_lbl = tk.Label(r, text="DA Timer", bg=SURFACE, fg=MUTED,
+        self.app_mark = tk.Label(r, bg=SURFACE, bd=0)
+        self._app_mark_h = None
+        self.app_lbl = tk.Label(r, text=f"{APP_NAME}  \u00b7  by {AUTHOR}",
+                                bg=SURFACE, fg=MUTED,
                                 anchor="w", font=(UI_FONT, 10))
         self.show_name_lbl = tk.Label(r, bg=SURFACE, fg=TEXT, anchor="w",
                                       font=(UI_BOLD, 18))
@@ -2984,7 +3024,8 @@ class DATimerApp:
         self.deck_pill = Pill(r, page_bg=SURFACE, height=30, font_px=14)
         self.sync_pill = Pill(r, page_bg=SURFACE, height=30, font_px=14)
         self.status_lbl = tk.Label(r, bg=SURFACE, fg=FAINT, anchor="e",
-                                   font=(UI_FONT, 10), text=f"v{VERSION}")
+                                   font=(UI_FONT, 10),
+                                   text=f"v{VERSION} \u00b7 {AUTHOR}")
 
         # Running order panel
         sp = self.seg_panel = tk.Frame(r, bg=SURFACE)
@@ -3173,7 +3214,19 @@ class DATimerApp:
             self.top_logo.place_forget()
         self.app_lbl.config(font=(UI_FONT, -int(hh * 0.2)))
         self.show_name_lbl.config(font=(UI_BOLD, -int(hh * 0.36)))
-        put(self.app_lbl, x, hh * 0.12, W * 0.3, hh * 0.3)
+        mark_h = max(8, int(hh * 0.16))
+        if mark_h != self._app_mark_h:
+            self._app_mark_h = mark_h
+            self._app_mark_img = author_logo(mark_h)
+            self.app_mark.config(image=self._app_mark_img or "")
+        if self._app_mark_img is not None:
+            mw = self._app_mark_img.width()
+            put(self.app_mark, x, hh * 0.12 + (hh * 0.3 - mark_h) / 2, mw,
+                mark_h)
+            put(self.app_lbl, x + mw + px(8), hh * 0.12, W * 0.3, hh * 0.3)
+        else:
+            self.app_mark.place_forget()
+            put(self.app_lbl, x, hh * 0.12, W * 0.3, hh * 0.3)
         put(self.show_name_lbl, x, hh * 0.38, W * 0.4, hh * 0.5)
         cl_w = hh * 2.6
         if logos:
@@ -3382,7 +3435,8 @@ class DATimerApp:
                 w.place_forget()
                 continue
             if w is self.status_lbl:
-                ww = px(48)
+                ww = tkfont.Font(font=w.cget("font")).measure(
+                    w.cget("text")) + px(6)
                 hh = px(20)
             else:
                 ww, hh = w.width_px, w.h
