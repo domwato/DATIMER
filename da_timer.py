@@ -42,6 +42,7 @@ import queue
 import re
 import shutil
 import sys
+import weakref
 import threading
 import time
 from datetime import datetime, timedelta
@@ -80,7 +81,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "7.3"
+VERSION = "7.4"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -253,6 +254,85 @@ def init_fonts(root):
             DIGIT_FONT, DIGIT_WEIGHT = f, "normal" if "semibold" in f.lower() \
                 else "bold"
             break
+
+# --------------------------------------------------------------------------
+# Font choice (Settings -> Fonts). The code always names the built-in
+# families; widgets are remapped to the chosen fonts when they appear, so a
+# change applies straight away everywhere, including windows opened later.
+# --------------------------------------------------------------------------
+FONT_CHOICE = {"text": "", "clock": "", "clock_bold": False}
+_FIT_LABELS = weakref.WeakSet()
+_FONT_ORIG = weakref.WeakKeyDictionary()      # widget -> family it was built with
+
+
+def _font_roles():
+    regular = {UI_FONT}
+    bold = {UI_BOLD, UI_HEAVY} - regular
+    return regular, bold, {DIGIT_FONT}
+
+
+def ft(family, size, *styles):
+    """Map a built-in family to the chosen font: ft(UI_BOLD, 12) etc."""
+    regular, bold, digits = _font_roles()
+    text, clock = FONT_CHOICE.get("text"), FONT_CHOICE.get("clock")
+    if family in digits and clock:
+        return (clock, size) + (("bold",) if FONT_CHOICE.get("clock_bold")
+                                else ()) + styles
+    if family in bold and text:
+        return (text, size, "bold") + tuple(x for x in styles if x != "bold")
+    if family in regular and text:
+        return (text, size) + styles
+    return (family, size) + styles
+
+
+def remap_fonts(widget):
+    """Apply the chosen fonts to `widget` and everything inside it."""
+    stack = [widget]
+    while stack:
+        w = stack.pop()
+        try:
+            stack.extend(w.winfo_children())
+        except tk.TclError:
+            continue
+        if isinstance(w, FitLabel) or isinstance(w, (ttk.Widget,)):
+            continue
+        try:
+            spec = w.cget("font")
+        except (tk.TclError, AttributeError):
+            continue
+        try:
+            parts = list(w.tk.splitlist(spec))
+        except tk.TclError:
+            continue
+        if len(parts) < 2:
+            continue                      # a named font, leave it alone
+        fam, size, styles = parts[0], parts[1], tuple(parts[2:])
+        orig = _FONT_ORIG.get(w)
+        if orig is None:
+            regular, bold, digits = _font_roles()
+            if fam not in regular | bold | digits:
+                continue
+            _FONT_ORIG[w] = orig = fam
+        elif fam != orig and fam in set().union(*_font_roles()):
+            _FONT_ORIG[w] = orig = fam    # re-laid-out with a new role
+        new = ft(orig, size, *[x for x in styles if x != "bold"])
+        if tuple(str(x) for x in new) != tuple(str(x) for x in parts):
+            try:
+                w.config(font=new)
+            except tk.TclError:
+                pass
+    for lbl in list(_FIT_LABELS):
+        try:
+            lbl.apply_font_choice()
+        except tk.TclError:
+            pass
+
+
+def font_has_tabular_digits(root, family):
+    f = tkfont.Font(root=root, family=family, size=-40)
+    widths = {f.measure(d) for d in "0123456789"}
+    return len(widths) == 1
+
 
 # --------------------------------------------------------------------------
 # Windows helpers: DPI awareness + monitor enumeration
@@ -660,16 +740,34 @@ def fmt(seconds):
 class FitLabel(tk.Label):
     def __init__(self, master, sample, fill=0.92, family=None, weight=None,
                  **kw):
-        self._family = family or DIGIT_FONT
-        self._weight = weight or (DIGIT_WEIGHT if self._family == DIGIT_FONT
-                                  else "normal")
+        self._base_family = family or DIGIT_FONT
+        self._base_weight = weight
+        self._family, self._weight = self._resolve()
         self._font = tkfont.Font(family=self._family, size=-40,
                                  weight=self._weight)
         super().__init__(master, font=self._font, **kw)
+        _FIT_LABELS.add(self)
         self._sample = sample
         self._fill = fill
         self._last = None
         self.bind("<Configure>", self._refit)
+
+    def _resolve(self):
+        base = self._base_family
+        weight = self._base_weight or (DIGIT_WEIGHT if base == DIGIT_FONT
+                                       else "normal")
+        mapped = ft(base, -40)
+        if mapped[0] != base:
+            weight = "bold" if "bold" in mapped[2:] else "normal"
+        return mapped[0], weight
+
+    def apply_font_choice(self):
+        fam, weight = self._resolve()
+        if (fam, weight) != (self._family, self._weight):
+            self._family, self._weight = fam, weight
+            self._font.configure(family=fam, weight=weight)
+            self._last = None
+            self._refit()
 
     def _refit(self, _event=None):
         w, h = self.winfo_width(), self.winfo_height()
@@ -1539,6 +1637,150 @@ class Switch(tk.Canvas):
                          outline=knob)
 
 
+class FontDialog(tk.Toplevel):
+    """Settings -> Fonts: pick the clock and text fonts, applied live."""
+    BUILTIN_CLOCK = "Built-in (DA Clock)"
+    BUILTIN_TEXT = "Built-in (DA Sans)"
+
+    def __init__(self, master, app):
+        super().__init__(master)
+        self.app = app
+        self.title("Fonts")
+        self.configure(bg=SURFACE, padx=px(26), pady=px(20))
+        self.transient(master)
+        self.resizable(False, False)
+        own = {UI_FONT, UI_BOLD, UI_HEAVY, DIGIT_FONT}
+        self.families = sorted({f for f in tkfont.families(self)
+                                if not f.startswith("@") and f not in own},
+                               key=str.lower)
+
+        tk.Label(self, text="Fonts", bg=SURFACE, fg=TEXT,
+                 font=(UI_BOLD, 18)).grid(row=0, column=0, columnspan=3,
+                                          sticky="w")
+        tk.Label(self, text="Changes apply straight away, here and on the "
+                            "output screen. Type to search the list.",
+                 bg=SURFACE, fg=MUTED, font=(UI_FONT, 11)).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(0, 14))
+
+        def row(r, label, builtin, current):
+            tk.Label(self, text=label, bg=SURFACE, fg=TEXT,
+                     font=(UI_BOLD, 12)).grid(row=r, column=0, sticky="w",
+                                              padx=(0, 14), pady=4)
+            cb = ttk.Combobox(self, width=34, style="Dark.TCombobox",
+                              values=[builtin] + self.families,
+                              font=(UI_FONT, 11))
+            cb.set(current or builtin)
+            cb.grid(row=r, column=1, sticky="w", pady=4)
+            cb.bind("<<ComboboxSelected>>", lambda e: self._apply())
+            cb.bind("<Return>", lambda e: self._apply())
+            cb.bind("<FocusOut>", lambda e: self._apply())
+            cb.bind("<KeyRelease>", lambda e, c=cb, b=builtin:
+                    self._filter(e, c, b))
+            return cb
+
+        self.clock_cb = row(2, "Clocks", self.BUILTIN_CLOCK,
+                            FONT_CHOICE.get("clock"))
+        bf = tk.Frame(self, bg=SURFACE)
+        bf.grid(row=2, column=2, sticky="w", padx=(14, 0))
+        self.bold = Switch(bf, FONT_CHOICE.get("clock_bold"),
+                           lambda v: self._apply())
+        self.bold.pack(side="left")
+        tk.Label(bf, text="Bold", bg=SURFACE, fg=MUTED,
+                 font=(UI_FONT, 11)).pack(side="left", padx=(8, 0))
+        self.text_cb = row(3, "Text", self.BUILTIN_TEXT,
+                           FONT_CHOICE.get("text"))
+
+        pv = tk.Frame(self, bg=BG, padx=px(20), pady=px(14),
+                      highlightthickness=1, highlightbackground=BORDER)
+        pv.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+        self.pv_cap = tk.Label(pv, text="Segment 3   Next: VT1", bg=BG,
+                               fg=MUTED, anchor="w")
+        self.pv_cap.pack(anchor="w")
+        self.pv_title = tk.Label(pv, text="Panel discussion", bg=BG, fg=TEXT,
+                                 anchor="w")
+        self.pv_title.pack(anchor="w")
+        self.pv_clock = tk.Label(pv, text="00:12:47", bg=BG, fg=TEXT,
+                                 anchor="w")
+        self.pv_clock.pack(anchor="w")
+        self.warn = tk.Label(self, bg=SURFACE, fg=AMBER, font=(UI_FONT, 10),
+                             justify="left", wraplength=px(520), anchor="w")
+        self.warn.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        tk.Label(self, text="Buttons keep the built-in font so they always "
+                            "fit.", bg=SURFACE, fg=FAINT,
+                 font=(UI_FONT, 10)).grid(row=6, column=0, columnspan=3,
+                                          sticky="w", pady=(2, 0))
+
+        bottom = tk.Frame(self, bg=SURFACE)
+        bottom.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(18, 0))
+        ModernButton.sized(bottom, "Back to built-in", self.reset, SURFACE,
+                           "neutral", font_px=13, height=38).pack(side="left")
+        ModernButton.sized(bottom, "Done", self.done, SURFACE, "primary",
+                           font_px=14, height=38, pad_x=22).pack(side="right")
+        self.bind("<Escape>", lambda e: self.done())
+        self._preview()
+        self.update_idletasks()
+        x = master.winfo_rootx() + (master.winfo_width() - self.winfo_width()) // 2
+        y = master.winfo_rooty() + (master.winfo_height() - self.winfo_height()) // 3
+        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+    def _filter(self, e, cb, builtin):
+        if e.keysym in ("Return", "Escape", "Up", "Down", "Tab"):
+            return
+        q = cb.get().strip().lower()
+        cb["values"] = [builtin] + [f for f in self.families
+                                    if q in f.lower()]
+
+    def _pick(self, cb, builtin):
+        name = cb.get().strip()
+        if not name or name == builtin:
+            return ""
+        for f in self.families:
+            if f.lower() == name.lower():
+                return f
+        return None                       # not a font (still typing)
+
+    def _apply(self):
+        clock = self._pick(self.clock_cb, self.BUILTIN_CLOCK)
+        text = self._pick(self.text_cb, self.BUILTIN_TEXT)
+        if clock is None or text is None:
+            self._preview()
+            return
+        if (clock, text, self.bold.value) != (
+                FONT_CHOICE.get("clock"), FONT_CHOICE.get("text"),
+                FONT_CHOICE.get("clock_bold")):
+            self.app.set_fonts(text=text, clock=clock,
+                               clock_bold=self.bold.value)
+        self._preview()
+
+    def _preview(self):
+        clock = FONT_CHOICE.get("clock") or DIGIT_FONT
+        weight = ("bold" if FONT_CHOICE.get("clock_bold") else "normal") \
+            if FONT_CHOICE.get("clock") else DIGIT_WEIGHT
+        self.pv_clock.config(font=(clock, -px(64), weight))
+        self.pv_cap.config(font=ft(UI_FONT, -px(16)))
+        self.pv_title.config(font=ft(UI_BOLD, -px(24)))
+        if FONT_CHOICE.get("clock") and not font_has_tabular_digits(
+                self, clock):
+            self.warn.config(text=f"The numbers in {clock} aren't all the "
+                                  f"same width, so the clocks will shift "
+                                  f"slightly as they count. Fonts like "
+                                  f"Bahnschrift, Consolas or DIN avoid that.")
+        else:
+            self.warn.config(text="")
+
+    def reset(self):
+        self.clock_cb.set(self.BUILTIN_CLOCK)
+        self.text_cb.set(self.BUILTIN_TEXT)
+        if self.bold.value:
+            self.bold.value = False
+            self.bold._draw()
+        self._apply()
+
+    def done(self):
+        self._apply()
+        self.destroy()
+
+
 class SettingsDialog(tk.Toplevel):
     def __init__(self, master, app):
         super().__init__(master)
@@ -1627,6 +1869,9 @@ class SettingsDialog(tk.Toplevel):
                            height=38).pack(side="left")
         ModernButton.sized(bottom, "Done", self.destroy, SURFACE, "primary",
                            font_px=14, height=38, pad_x=22).pack(side="right")
+        ModernButton.sized(bottom, "Fonts", self.app.open_fonts, SURFACE,
+                           "neutral", font_px=13, height=38).pack(
+            side="right", padx=(0, 10))
 
         # Credit
         about = tk.Frame(self, bg=SURFACE)
@@ -2790,6 +3035,14 @@ class DATimerApp:
         self._note_stamp = None
         self._last_layout = None
         self._out_status = ("", None)
+        fc = self.settings.get("fonts") or {}
+        fams = set(tkfont.families(root))
+        FONT_CHOICE.update(
+            text=fc.get("text") if fc.get("text") in fams else "",
+            clock=fc.get("clock") if fc.get("clock") in fams else "",
+            clock_bold=bool(fc.get("clock_bold")))
+        root.bind_class("Toplevel", "<Map>", lambda e: self._fonts_on_map(e),
+                        add="+")
         self._undo_stack = []          # most recent last
         self._seg_row_h = px(30)
         self._in_action = False
@@ -2864,16 +3117,16 @@ class DATimerApp:
                         fieldbackground=SURFACE, foreground=TEXT,
                         bordercolor=SURFACE, lightcolor=SURFACE,
                         darkcolor=SURFACE, borderwidth=0,
-                        font=(UI_FONT, 11), rowheight=px(30))
+                        font=ft(UI_FONT, 11), rowheight=px(30))
         style.configure("Dark.Treeview.Heading", background=SURFACE,
                         foreground=MUTED, bordercolor=SURFACE,
                         lightcolor=SURFACE, darkcolor=SURFACE,
-                        relief="flat", font=(UI_BOLD, 10), padding=(4, 6))
+                        relief="flat", font=ft(UI_BOLD, 10), padding=(4, 6))
         style.map("Dark.Treeview.Heading",
                   background=[("active", SURFACE_2)])
         style.map("Dark.Treeview", background=[("selected", CYAN_DIM)],
                   foreground=[("selected", TEXT)])
-        style.configure("Seg.Dark.Treeview", font=(UI_FONT, 11),
+        style.configure("Seg.Dark.Treeview", font=ft(UI_FONT, 11),
                         rowheight=px(30))
         style.layout("Dark.Treeview", [("Treeview.treearea",
                                         {"sticky": "nswe"})])
@@ -3421,6 +3674,8 @@ class DATimerApp:
             panel(self.log_bg, self.log_panel, side_top, side_h)
         elif seg_on:
             panel(self.seg_bg, self.seg_panel, side_top, side_h)
+        if self._fonts_custom():
+            remap_fonts(self.root)
         self._update_visuals()
 
     def _place_status(self):
@@ -4093,6 +4348,31 @@ class DATimerApp:
             "toggles": {"dual": self.output is not None, "tod": self.tod_on,
                         "log": self.log_on, "segments": self.seg_panel_on},
         }
+
+    # -------------------------------------------------------------- fonts --
+    def _fonts_custom(self):
+        return bool(FONT_CHOICE.get("text") or FONT_CHOICE.get("clock"))
+
+    def _fonts_on_map(self, e):
+        if self._fonts_custom() or getattr(self, "_fonts_were_custom", False):
+            remap_fonts(e.widget)
+
+    def set_fonts(self, text=None, clock=None, clock_bold=None):
+        if text is not None:
+            FONT_CHOICE["text"] = text
+        if clock is not None:
+            FONT_CHOICE["clock"] = clock
+        if clock_bold is not None:
+            FONT_CHOICE["clock_bold"] = bool(clock_bold)
+        self._fonts_were_custom = True     # keep remapping back to default
+        self.settings["fonts"] = dict(FONT_CHOICE)
+        save_settings(self.settings)
+        self._style_ttk()
+        remap_fonts(self.root)
+        self._layout(force=True)
+
+    def open_fonts(self):
+        FontDialog(self.root, self)
 
     # ----------------------------------------------------------- settings --
     def feat(self, key):
