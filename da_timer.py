@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "7.5"
+VERSION = "7.6"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -1266,20 +1266,80 @@ class NumPad(tk.Toplevel):
 # --------------------------------------------------------------------------
 # Output (dual screen) window
 # --------------------------------------------------------------------------
-class OutputWindow(tk.Toplevel):
-    """Clean feed. Layout (top to bottom), sized as proportions of the screen:
-       [logo | show title | logo]  - only if the show has a title or logos
-       segment label / segment time / show label / show time
-       [message bar]               - only if the show has a message
-    """
+# Output screen elements: id, name in the layout editor, default height
+# share, default colour role ("fg" text, "accent" labels, "auto" status)
+OUTPUT_ELEMENTS = [
+    ("title", "Title and logos", 2.4, "fg"),
+    ("seg_title", "Segment name line", 1.4, "accent"),
+    ("seg_time", "Segment clock", 5.0, "fg"),
+    ("seg_status", "Time left / over", 1.1, "auto"),
+    ("show_title", "Program name line", 1.4, "accent"),
+    ("show_time", "Program clock", 5.0, "fg"),
+    ("clock", "Time of day / timecode", 2.4, "fg"),
+    ("message", "Bottom message", 1.4, "fg"),
+]
+OUTPUT_DEFAULTS = {e[0]: e for e in OUTPUT_ELEMENTS}
 
-    def __init__(self, master, monitor, on_close, show):
+
+def _contrast(colour):
+    """Black or white, whichever reads better on `colour` ("#rrggbb")."""
+    try:
+        c = colour.lstrip("#")
+        r, g, b = (int(c[i:i + 2], 16) for i in (0, 2, 4))
+        return "#000000" if (r * 299 + g * 587 + b * 114) / 1000 > 140 \
+            else "#ffffff"
+    except Exception:
+        return TEXT
+
+
+def output_layout(show):
+    """The show's output layout: a list of {id, show, size, colour, ...} in
+    screen order. Shows saved before the layout editor are converted from
+    their old switches."""
+    saved = show.get("output_layout")
+    if saved:
+        known = {r.get("id") for r in saved}
+        rows = [dict(r) for r in saved if r.get("id") in OUTPUT_DEFAULTS]
+        for eid, *_ in OUTPUT_ELEMENTS:          # elements added later
+            if eid not in known:
+                rows.append({"id": eid, "show": False, "size": 1.0,
+                             "colour": ""})
+    else:
+        clock = show.get("output_clock") or "off"
+        rows = []
+        for eid, *_ in OUTPUT_ELEMENTS:
+            on = True
+            if eid == "seg_status":
+                on = bool(show.get("output_goals"))
+            elif eid == "clock":
+                on = clock != "off"
+            rows.append({"id": eid, "show": on, "size": 1.0, "colour": ""})
+    for r in rows:
+        r.setdefault("show", True)
+        r.setdefault("size", 1.0)
+        r.setdefault("colour", "")
+        if r["id"] == "clock":
+            r.setdefault("mode", show.get("output_clock") if
+                         show.get("output_clock") in ("tod", "tc") else "tod")
+        if r["id"] == "seg_title":
+            r.setdefault("segments_left", bool(show.get("output_segments",
+                                                        True)))
+    return rows
+
+
+def output_row(show, eid):
+    for r in output_layout(show):
+        if r["id"] == eid:
+            return r
+    return {"id": eid, "show": False, "size": 1.0, "colour": ""}
+
+
+class OutputView(tk.Frame):
+    """What the presenter / floor sees. Used full screen by OutputWindow and
+    small as the live preview in the layout editor."""
+
+    def __init__(self, master, show):
         super().__init__(master, bg=OUT_BG)
-        self.title(f"{APP_NAME} - Output")
-        self.on_close = on_close
-        self.monitor = monitor
-        self.fullscreen = False
-
         self.logo_left = LogoLabel(self)
         self.logo_right = LogoLabel(self)
         self.title_lbl = FitLabel(self, " ", fill=0.8, family=UI_BOLD)
@@ -1294,35 +1354,46 @@ class OutputWindow(tk.Toplevel):
         self.message_lbl = FitLabel(self, " ", fill=0.7, family=UI_BOLD)
         self.clock_cap = FitLabel(self, "TOD", fill=0.6, family=UI_BOLD,
                                   anchor="e")
-        self.clock_time = FitLabel(self, "00:00:00", fill=0.85,
-                                   anchor="w")
+        self.clock_time = FitLabel(self, "00:00:00", fill=0.85, anchor="w")
         self.rule = tk.Frame(self, height=2)
-        for w in self.winfo_children():
-            w.bind("<Double-Button-1>", self.toggle_fullscreen)
-
-        self.bind("<Double-Button-1>", self.toggle_fullscreen)
-        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.clock_mode = "off"
+        self.status_colour = ""
         self.apply_show(show)
-        self.go_fullscreen()
 
     def apply_show(self, show):
         bg, fg = show.get("bg") or OUT_BG, show.get("fg") or OUT_FG
         accent = show.get("accent") or OUT_ACCENT
+        layout = output_layout(show)
+        rows = {r["id"]: r for r in layout}
+
+        def colour(eid):
+            r = rows.get(eid) or {}
+            if r.get("colour"):
+                return r["colour"]
+            role = OUTPUT_DEFAULTS[eid][3]
+            return accent if role == "accent" else fg
+
         self.configure(bg=bg)
         for w in self.winfo_children():
             w.configure(bg=bg)
-            if isinstance(w, FitLabel):
-                w.configure(fg=fg)
-        self.seg_title.configure(fg=accent)
-        self.show_title.configure(fg=accent)
+        for eid, widgets in (("title", (self.title_lbl,)),
+                             ("seg_title", (self.seg_title,)),
+                             ("seg_time", (self.seg_time,)),
+                             ("seg_status", (self.seg_status,)),
+                             ("show_title", (self.show_title,)),
+                             ("show_time", (self.show_time,)),
+                             ("clock", (self.clock_time,)),
+                             ("message", (self.message_lbl,))):
+            for w in widgets:
+                w.configure(fg=colour(eid))
+        self.status_colour = (rows.get("seg_status") or {}).get("colour", "")
         self.clock_cap.configure(fg=accent)
         self.rule.configure(bg=accent)
-
         seg_lbl = show["segment_label"].upper()
         show_lbl = show["show_label"].upper()
         longest = max(seg_lbl, show_lbl, "SEGMENT TIME", key=len)
-        if show.get("output_segments", True):
-            longest = max(longest, f"{seg_lbl} 88 OF 88  \u00b7  88 LEFT",
+        if (rows.get("seg_title") or {}).get("segments_left"):
+            longest = max(longest, f"{seg_lbl} 88 OF 88  ·  88 LEFT",
                           key=len)
         self.seg_title.set_text(seg_lbl, longest)
         self.show_title.set_text(show_lbl, longest)
@@ -1332,31 +1403,31 @@ class OutputWindow(tk.Toplevel):
         self.logo_left.set_image(left)
         self.logo_right.set_image(right)
 
-        # Work out which bands are needed and place everything
         for w in self.winfo_children():
             w.place_forget()
-        has_header = bool(show["title"] or left or right)
-        has_msg = bool(show["message"])
         bands = []
-        if has_header:
-            bands.append(("header", 2.4))
-        bands += [("seg_title", 1.4), ("seg_time", 5)]
-        if show.get("output_goals"):
-            bands.append(("seg_status", 1.1))
-        bands += [("show_title", 1.4), ("show_time", 5)]
-        self.clock_mode = show.get("output_clock") or "off"
+        for r in layout:
+            eid = r["id"]
+            if not r.get("show"):
+                continue
+            if eid == "title" and not (show["title"] or left or right):
+                continue
+            if eid == "message" and not show["message"]:
+                continue
+            size = min(max(float(r.get("size") or 1.0), 0.25), 4.0)
+            bands.append((eid, OUTPUT_DEFAULTS[eid][2] * size))
+        clock = rows.get("clock") or {}
+        self.clock_mode = (clock.get("mode") or "tod") if clock.get("show") \
+            else "off"
         if self.clock_mode != "off":
-            bands.append(("clock", 2.4))
             self.clock_time.set_text(
                 "", "00:00:00:00" if self.clock_mode == "tc" else "00:00:00")
             self.clock_cap.set_text("TOD", "TOD")
-        if has_msg:
-            bands.append(("message", 1.4))
-        total = sum(wgt for _, wgt in bands)
+        total = sum(wgt for _, wgt in bands) or 1
         y = 0.0
         for name, wgt in bands:
             h = wgt / total
-            if name == "header":
+            if name == "title":
                 if left or right:
                     self.logo_left.place(relx=0.01, rely=y, relwidth=0.22,
                                          relheight=h)
@@ -1386,6 +1457,64 @@ class OutputWindow(tk.Toplevel):
                 widget.place(relx=0, rely=y, relwidth=1, relheight=h)
             y += h
 
+    def update_extras(self, seg_caption, clock_cap, clock_text):
+        if self.seg_title.cget("text") != seg_caption:
+            self.seg_title.config(text=seg_caption)
+        if self.clock_mode != "off":
+            if self.clock_cap.cget("text") != clock_cap:
+                self.clock_cap.config(text=clock_cap)
+            if self.clock_time.cget("text") != clock_text:
+                self.clock_time.config(text=clock_text)
+
+    def update_times(self, seg, show, status="", status_fg=None):
+        if self.seg_time.cget("text") != seg:
+            self.seg_time.config(text=seg)
+        if self.show_time.cget("text") != show:
+            self.show_time.config(text=show)
+        if self.seg_status.cget("text") != status:
+            self.seg_status.config(text=status)
+        status_fg = self.status_colour or status_fg
+        if status_fg and self.seg_status.cget("fg") != status_fg:
+            self.seg_status.config(fg=status_fg)
+
+
+class OutputWindow(tk.Toplevel):
+    """The output screen: an OutputView filling a second monitor."""
+
+    def __init__(self, master, monitor, on_close, show):
+        super().__init__(master, bg=OUT_BG)
+        self.title(f"{APP_NAME} - Output")
+        self.on_close = on_close
+        self.monitor = monitor
+        self.fullscreen = False
+        self.view = OutputView(self, show)
+        self.view.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._bind_dbl(self.view)
+        self.bind("<Double-Button-1>", self.toggle_fullscreen)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.go_fullscreen()
+
+    def _bind_dbl(self, w):
+        w.bind("<Double-Button-1>", self.toggle_fullscreen)
+        for c in w.winfo_children():
+            self._bind_dbl(c)
+
+    def __getattr__(self, name):          # seg_title, clock_time, ... on view
+        view = self.__dict__.get("view")
+        if view is not None and not name.startswith("_"):
+            return getattr(view, name)
+        raise AttributeError(name)
+
+    def apply_show(self, show):
+        self.configure(bg=show.get("bg") or OUT_BG)
+        self.view.apply_show(show)
+
+    def update_times(self, *a, **k):
+        self.view.update_times(*a, **k)
+
+    def update_extras(self, *a, **k):
+        self.view.update_extras(*a, **k)
+
     def go_fullscreen(self):
         m = self.monitor
         self.overrideredirect(True)
@@ -1413,28 +1542,268 @@ class OutputWindow(tk.Toplevel):
         else:
             self.go_windowed()
 
-    def update_extras(self, seg_caption, clock_cap, clock_text):
-        if self.seg_title.cget("text") != seg_caption:
-            self.seg_title.config(text=seg_caption)
-        if self.clock_mode != "off":
-            if self.clock_cap.cget("text") != clock_cap:
-                self.clock_cap.config(text=clock_cap)
-            if self.clock_time.cget("text") != clock_text:
-                self.clock_time.config(text=clock_text)
-
-    def update_times(self, seg, show, status="", status_fg=None):
-        if self.seg_time.cget("text") != seg:
-            self.seg_time.config(text=seg)
-        if self.show_time.cget("text") != show:
-            self.show_time.config(text=show)
-        if self.seg_status.cget("text") != status:
-            self.seg_status.config(text=status)
-        if status_fg and self.seg_status.cget("fg") != status_fg:
-            self.seg_status.config(fg=status_fg)
-
     def close(self):
         self.destroy()
         self.on_close()
+
+
+# --------------------------------------------------------------------------
+# Output layout editor: which elements show, how big, what colour, in what
+# order - with a live preview, and the real output screen updating as you go
+# --------------------------------------------------------------------------
+class OutputLayoutEditor(tk.Toplevel):
+    SIZES = [0.5, 0.65, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+
+    def __init__(self, master, app, show, on_done, live=True):
+        super().__init__(master)
+        self.app, self.on_done, self.live = app, on_done, live
+        self.original = copy_show(show)
+        self.show = copy_show(show)
+        self.rows = output_layout(self.show)
+        self.title(f"Output layout - {show['name']}")
+        self.configure(bg=SURFACE, padx=px(22), pady=px(18))
+        self.transient(master)
+        self.resizable(False, False)
+
+        tk.Label(self, text="Output screen layout", bg=SURFACE, fg=TEXT,
+                 font=(UI_BOLD, 16)).grid(row=0, column=0, columnspan=2,
+                                          sticky="w")
+        tk.Label(self, text=f"{show['name']}  ·  changes show on the "
+                            f"output straight away", bg=SURFACE, fg=MUTED,
+                 font=(UI_FONT, 10)).grid(row=1, column=0, columnspan=2,
+                                          sticky="w", pady=(0, 12))
+
+        left = tk.Frame(self, bg=SURFACE)
+        left.grid(row=2, column=0, sticky="nw")
+        # whole-screen colours
+        cols = tk.Frame(left, bg=SURFACE)
+        cols.pack(anchor="w", pady=(0, 10))
+        tk.Label(cols, text="Colours", bg=SURFACE, fg=TEXT,
+                 font=(UI_BOLD, 11)).pack(side="left", padx=(0, 10))
+        self.swatches = {}
+        for key, text in (("bg", "Background"), ("fg", "Text"),
+                          ("accent", "Labels")):
+            b = tk.Label(cols, text=text, font=(UI_BOLD, 9), bd=0,
+                         padx=px(10), pady=px(5), cursor="hand2")
+            b.bind("<Button-1>", lambda e, k=key: self._pick_show_colour(k))
+            b.pack(side="left", padx=(0, 6))
+            self.swatches[key] = b
+
+        self.list_frame = tk.Frame(left, bg=SURFACE)
+        self.list_frame.pack(fill="x")
+
+        # live preview
+        right = tk.Frame(self, bg=SURFACE)
+        right.grid(row=2, column=1, sticky="n", padx=(px(22), 0))
+        tk.Label(right, text="Preview", bg=SURFACE, fg=MUTED,
+                 font=(UI_BOLD, 10)).pack(anchor="w", pady=(0, 4))
+        mon = app._monitor_choice()
+        aspect = (mon["h"] / mon["w"]) if mon.get("w") else 9 / 16
+        pw = px(420)
+        holder = tk.Frame(right, width=pw, height=int(pw * aspect), bg=BORDER,
+                          highlightthickness=1, highlightbackground=BORDER)
+        holder.pack()
+        holder.pack_propagate(False)
+        self.preview = OutputView(holder, self.show)
+        self.preview.pack(fill="both", expand=True)
+        tk.Label(right, text="Tip: double-click the output to switch it "
+                             "between full screen and a window.",
+                 bg=SURFACE, fg=FAINT, font=(UI_FONT, 9), wraplength=pw,
+                 justify="left").pack(anchor="w", pady=(6, 0))
+
+        bottom = tk.Frame(self, bg=SURFACE)
+        bottom.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(18, 0))
+        ModernButton.sized(bottom, "Reset layout", self.reset, SURFACE,
+                           "neutral", font_px=13, height=38).pack(side="left")
+        ModernButton.sized(bottom, "Done", self.done, SURFACE, "primary",
+                           font_px=14, height=38, pad_x=22).pack(side="right")
+        ModernButton.sized(bottom, "Cancel", self.cancel, SURFACE, "neutral",
+                           font_px=13, height=38).pack(side="right",
+                                                       padx=(0, 8))
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.bind("<Escape>", lambda e: self.cancel())
+        self._build_rows()
+        self._changed(initial=True)
+        self._tick()
+        self.update_idletasks()
+        x = master.winfo_rootx() + (master.winfo_width() - self.winfo_width()) // 2
+        y = master.winfo_rooty() + (master.winfo_height() - self.winfo_height()) // 3
+        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        self.grab_set()
+
+    # ----------------------------------------------------------- rows --
+    def _build_rows(self):
+        for w in self.list_frame.winfo_children():
+            w.destroy()
+        for col, text in enumerate(("Show", "Element", "Size", "Colour", "",
+                                    "Order")):
+            tk.Label(self.list_frame, text=text, bg=SURFACE, fg=FAINT,
+                     anchor="w", font=(UI_BOLD, 9)).grid(
+                row=0, column=col, sticky="w", pady=(0, 4),
+                padx=(4, 0) if col == 2 else 0)
+        for i, r in enumerate(self.rows, start=1):
+            eid = r["id"]
+            name = OUTPUT_DEFAULTS[eid][1]
+            f = self.list_frame
+            sw = Switch(f, r.get("show"), lambda v, r=r: self._set(r, show=v))
+            sw.grid(row=i, column=0, sticky="w", pady=px(3))
+            note = ""
+            if eid == "title" and not (self.show["title"] or
+                                       self.show["logo_left"] or
+                                       self.show["logo_right"]):
+                note = "  (no title or logos set)"
+            if eid == "message" and not self.show["message"]:
+                note = "  (no message set)"
+            tk.Label(f, text=name + note, bg=SURFACE,
+                     fg=TEXT if not note else MUTED, anchor="w", width=26,
+                     font=(UI_FONT, 11)).grid(row=i, column=1, sticky="w")
+            size = tk.Frame(f, bg=SURFACE)
+            size.grid(row=i, column=2, sticky="w", padx=(4, 10))
+            ModernButton(size, "−", lambda r=r: self._size(r, -1),
+                         SURFACE, font_px=14, size=(28, 26),
+                         tracking=0).pack(side="left")
+            tk.Label(size, text=f"{float(r.get('size') or 1) * 100:.0f}%",
+                     bg=SURFACE, fg=TEXT, width=5,
+                     font=(UI_FONT, 10)).pack(side="left")
+            ModernButton(size, "+", lambda r=r: self._size(r, 1), SURFACE,
+                         font_px=14, size=(28, 26),
+                         tracking=0).pack(side="left")
+            colour = r.get("colour") or self._default_colour(eid)
+            sw_lbl = tk.Label(f, text="Auto" if (eid == "seg_status" and
+                                                  not r.get("colour"))
+                              else ("Default" if not r.get("colour")
+                                    else " "),
+                              bg=colour if colour != "auto" else SURFACE_2,
+                              fg=_contrast(colour) if colour != "auto"
+                              else MUTED, width=8, cursor="hand2",
+                              font=(UI_FONT, 9), highlightthickness=1,
+                              highlightbackground=BORDER)
+            sw_lbl.grid(row=i, column=3, sticky="w", padx=(0, 4))
+            sw_lbl.bind("<Button-1>", lambda e, r=r: self._pick_colour(r))
+            extra = tk.Frame(f, bg=SURFACE)
+            extra.grid(row=i, column=4, sticky="w", padx=(0, 8))
+            if r.get("colour"):
+                ModernButton(extra, "Reset", lambda r=r: self._set(
+                    r, colour=""), SURFACE, "ghost", font_px=10,
+                    size=(52, 24)).pack(side="left", padx=(0, 6))
+            if eid == "seg_title":
+                v = tk.BooleanVar(value=bool(r.get("segments_left")))
+                tk.Checkbutton(extra, text="3 of 8 · 5 left",
+                               variable=v, bg=SURFACE, fg=TEXT,
+                               selectcolor=BG, activebackground=SURFACE,
+                               activeforeground=TEXT, highlightthickness=0,
+                               bd=0, font=(UI_FONT, 10),
+                               command=lambda r=r, v=v: self._set(
+                                   r, segments_left=bool(v.get()))
+                               ).pack(side="left")
+                extra._var = v
+            if eid == "clock":
+                mode = r.get("mode") or "tod"
+                for val, text in (("tod", "TOD"), ("tc", "Timecode")):
+                    ModernButton(extra, text, lambda r=r, val=val: self._set(
+                        r, mode=val), SURFACE,
+                        "on" if mode == val else "ghost", font_px=10,
+                        size=(74, 24)).pack(side="left", padx=(0, 4))
+            order = tk.Frame(f, bg=SURFACE)
+            order.grid(row=i, column=5, sticky="w")
+            ModernButton(order, "Up", lambda i=i: self._move(i - 1, -1),
+                         SURFACE, "ghost", font_px=10, size=(40, 24),
+                         tracking=0).pack(side="left")
+            ModernButton(order, "Down", lambda i=i: self._move(i - 1, 1),
+                         SURFACE, "ghost", font_px=10, size=(48, 24),
+                         tracking=0).pack(side="left")
+        remap_fonts(self.list_frame)
+
+    def _default_colour(self, eid):
+        role = OUTPUT_DEFAULTS[eid][3]
+        if role == "auto":
+            return "auto"
+        return self.show.get("accent") if role == "accent" else \
+            self.show.get("fg")
+
+    # --------------------------------------------------------- changes --
+    def _set(self, r, **kw):
+        r.update(kw)
+        self._build_rows()
+        self._changed()
+
+    def _size(self, r, step):
+        cur = float(r.get("size") or 1.0)
+        i = min(range(len(self.SIZES)), key=lambda k: abs(self.SIZES[k] - cur))
+        r["size"] = self.SIZES[min(max(i + step, 0), len(self.SIZES) - 1)]
+        self._build_rows()
+        self._changed()
+
+    def _move(self, i, step):
+        j = i + step
+        if 0 <= j < len(self.rows):
+            self.rows[i], self.rows[j] = self.rows[j], self.rows[i]
+            self._build_rows()
+            self._changed()
+
+    def _pick_colour(self, r):
+        start = r.get("colour") or self._default_colour(r["id"])
+        _rgb, hexcol = colorchooser.askcolor(
+            None if start == "auto" else start, parent=self,
+            title=f"Colour - {OUTPUT_DEFAULTS[r['id']][1]}")
+        if hexcol:
+            self._set(r, colour=hexcol)
+
+    def _pick_show_colour(self, key):
+        _rgb, hexcol = colorchooser.askcolor(self.show.get(key), parent=self,
+                                             title="Choose colour")
+        if hexcol:
+            self.show[key] = hexcol
+            self._build_rows()
+            self._changed()
+
+    def _changed(self, initial=False):
+        self.show["output_layout"] = [dict(r) for r in self.rows]
+        for key, b in self.swatches.items():
+            col = self.show.get(key)
+            b.config(bg=col, fg=_contrast(col))
+        self.preview.apply_show(self.show)
+        if self.live and not initial:
+            self.app.preview_output_show(self.show)
+
+    def _tick(self):
+        if not self.winfo_exists():
+            return
+        seg, show, status, col, caption, ccap, ctext = \
+            self.app.output_values(self.show)
+        self.preview.update_times(seg, show, status or "+00:12 OVER",
+                                  col or RED)
+        self.preview.update_extras(caption, ccap or "TOD",
+                                   ctext or f"{datetime.now():%H:%M:%S}")
+        self.after(250, self._tick)
+
+    def reset(self):
+        self.rows = output_layout({k: v for k, v in self.show.items()
+                                   if k != "output_layout"})
+        for r in self.rows:
+            r.update(show=r["id"] not in ("seg_status", "clock"), size=1.0,
+                     colour="")
+        self._build_rows()
+        self._changed()
+
+    def _close(self):
+        master = self.master
+        self.destroy()
+        if isinstance(master, tk.Toplevel):       # hand the grab back
+            try:
+                master.grab_set()
+            except tk.TclError:
+                pass
+
+    def cancel(self):
+        if self.live:
+            self.app.preview_output_show(self.original)
+        self._close()
+
+    def done(self):
+        self._changed(initial=True)
+        self._close()
+        self.on_done(self.show)
 
 
 # --------------------------------------------------------------------------
@@ -1533,44 +1902,18 @@ class ShowEditor(tk.Toplevel):
         ModernButton.sized(cf, "Reset", self.reset_colours, SURFACE,
                            font_px=12).pack(side="left")
         r += 1
-        self.output_goals_var = tk.BooleanVar(
-            value=bool(self.show.get("output_goals")))
-        tk.Checkbutton(self, text="Show segment time left / over on the "
-                                  "output screen",
-                       variable=self.output_goals_var, bg=SURFACE, fg=TEXT,
-                       selectcolor=BG, activebackground=SURFACE,
-                       activeforeground=TEXT, highlightthickness=0, bd=0,
-                       font=(UI_FONT, 10)).grid(row=r, column=1, columnspan=3,
-                                                sticky="w", pady=(10, 0))
-        r += 1
-        self.output_segs_var = tk.BooleanVar(
-            value=bool(self.show.get("output_segments", True)))
-        tk.Checkbutton(self, text="Show \u201cSegment 3 of 8 \u00b7 5 left\u201d on "
-                                  "the output screen",
-                       variable=self.output_segs_var, bg=SURFACE, fg=TEXT,
-                       selectcolor=BG, activebackground=SURFACE,
-                       activeforeground=TEXT, highlightthickness=0, bd=0,
-                       font=(UI_FONT, 10)).grid(row=r, column=1, columnspan=3,
-                                                sticky="w", pady=(4, 0))
-        r += 1
-        tk.Label(self, text="Output clock", **lab).grid(row=r, column=0,
-                                                        sticky="w",
-                                                        pady=(10, 0))
-        self.output_clock_var = tk.StringVar(
-            value=self.show.get("output_clock") or "off")
-        oc = tk.Frame(self, bg=SURFACE)
-        oc.grid(row=r, column=1, columnspan=3, sticky="w", pady=(10, 0))
-        for val, text in (("off", "Off"), ("tod", "Time of day"),
-                          ("tc", "Timecode (LTC)")):
-            tk.Radiobutton(oc, text=text, value=val,
-                           variable=self.output_clock_var, bg=SURFACE,
-                           fg=TEXT, selectcolor=BG, activebackground=SURFACE,
-                           activeforeground=TEXT, highlightthickness=0,
-                           font=(UI_FONT, 10)).pack(side="left", padx=(0, 12))
-        r += 1
-        tk.Label(self, text="Timecode needs Time source set to LTC; until it "
-                            "locks the output shows time of day.",
-                 **hint).grid(row=r, column=1, columnspan=3, sticky="w")
+        tk.Label(self, text="Output screen", **lab).grid(row=r, column=0,
+                                                         sticky="w",
+                                                         pady=(12, 0))
+        lf = tk.Frame(self, bg=SURFACE)
+        lf.grid(row=r, column=1, columnspan=3, sticky="w", pady=(12, 0))
+        ModernButton.sized(lf, "Layout, sizes and colours\u2026",
+                           self.edit_layout, SURFACE, "neutral",
+                           font_px=12).pack(side="left")
+        self.layout_note = tk.Label(lf, bg=SURFACE, fg=MUTED,
+                                    font=(UI_FONT, 9))
+        self.layout_note.pack(side="left", padx=(10, 0))
+        self._layout_note()
         r += 1
 
         # Save / cancel
@@ -1613,6 +1956,25 @@ class ShowEditor(tk.Toplevel):
         self.show[side] = stored
         self.previews[side][1].set_image(logo_path(stored))
 
+    def _layout_note(self):
+        on = [OUTPUT_DEFAULTS[r["id"]][1].lower() for r in
+              output_layout(self.show) if r.get("show")]
+        self.layout_note.config(text=f"{len(on)} of {len(OUTPUT_ELEMENTS)} "
+                                     f"items shown")
+
+    def edit_layout(self):
+        def done(show):
+            for k in ("output_layout", "bg", "fg", "accent"):
+                self.show[k] = show[k]
+            self._refresh_visuals()
+            self._layout_note()
+        app = getattr(self.master, "_da_app", None)
+        if app is None:
+            return
+        OutputLayoutEditor(self, app, self.show, done,
+                           live=(self.original_name ==
+                                 app.current_show.get("name")))
+
     def pick_colour(self, key):
         _rgb, hexcol = colorchooser.askcolor(self.show[key], parent=self,
                                              title="Choose colour")
@@ -1641,9 +2003,6 @@ class ShowEditor(tk.Toplevel):
     def save(self):
         for k, v in self.vars.items():
             self.show[k] = v.get().strip()
-        self.show["output_goals"] = bool(self.output_goals_var.get())
-        self.show["output_segments"] = bool(self.output_segs_var.get())
-        self.show["output_clock"] = self.output_clock_var.get()
         if not self.show["name"]:
             messagebox.showwarning(APP_NAME, "Give the show a name.",
                                    parent=self)
@@ -3151,6 +3510,7 @@ class DATimerApp:
         self._note_stamp = None
         self._last_layout = None
         self._out_status = ("", None)
+        root._da_app = self               # lets dialogs reach the app
         fc = self.settings.get("fonts") or {}
         fams = set(tkfont.families(root))
         FONT_CHOICE.update(
@@ -4082,18 +4442,51 @@ class DATimerApp:
     def _plan(self):
         return self.current_show.setdefault("plan", [])
 
-    def _out_seg_caption(self):
-        show = self.current_show
+    def output_values(self, show=None):
+        """Live values for an output view showing `show`."""
+        show = show or self.current_show
+        status, col = self._out_status
+        clock = output_row(show, "clock")
+        mode = (clock.get("mode") or "tod") if clock.get("show") else "off"
+        ccap, ctext = "", ""
+        if mode != "off":
+            clk = self.clock
+            if mode == "tc" and clk.mode == "ltc" and clk.ltc_tc and \
+                    clk.state == "ok":
+                ccap, ctext = "TC", clk.ltc_tc
+            else:
+                ccap, ctext = "TOD", f"{clk.now():%H:%M:%S}"
+        return (fmt(self.segment.elapsed()), fmt(self.show.elapsed()),
+                status, col, self._out_seg_caption(show), ccap, ctext)
+
+    def preview_output_show(self, show):
+        """Show a layout being edited on the real output, live."""
+        if self.output is not None and \
+                show.get("name") == self.current_show.get("name"):
+            self.output.apply_show(show)
+
+    def open_output_layout(self):
+        def done(show):
+            for k in ("output_layout", "bg", "fg", "accent"):
+                self.current_show[k] = show[k]
+            if self.current_show.get("name"):
+                save_show(self.current_show)
+            self.apply_show()
+        OutputLayoutEditor(self.root, self, self.current_show, done)
+
+    def _out_seg_caption(self, show=None):
+        show = show or self.current_show
         label = show["segment_label"].upper()
         prog = self._seg_progress()
-        if not show.get("output_segments", True) or not prog:
+        if not output_row(show, "seg_title").get("segments_left") or not prog:
             return label
         n, total, left = prog
         return f"{label} {n} OF {total}  \u00b7  {left} LEFT"
 
     def _out_clock(self):
         """(caption, time text) for the output's clock band."""
-        mode = self.current_show.get("output_clock") or "off"
+        row = output_row(self.current_show, "clock")
+        mode = (row.get("mode") or "tod") if row.get("show") else "off"
         if mode == "off":
             return "", ""
         clk = self.clock
@@ -4416,6 +4809,8 @@ class DATimerApp:
             menu.add_command(label=label,
                              command=lambda i=i, m=m: self._use_screen(i, m))
         menu.add_separator()
+        menu.add_command(label="Layout, sizes and colours\u2026",
+                         command=self.open_output_layout)
         menu.add_command(label="Refresh screens", command=self.pick_screen)
         self._popup(menu, self.screen_btn)
 
