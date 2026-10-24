@@ -7,6 +7,8 @@ on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+  release:
+    types: [published]       # publishing a release builds and attaches the apps
 
 permissions:
   contents: write          # lets a version tag publish a release
