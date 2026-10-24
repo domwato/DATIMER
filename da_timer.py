@@ -24,7 +24,7 @@ Commands: see API_COMMANDS below.
     F2      Show the log and jump to the note box
     Ctrl+M  Drop a MARK in the log (works anywhere)
     Ctrl+Z  Undo the last action (reset, next segment, stop/start, preset...)
-    D       Dual screen on / off
+    D       Output to monitor on / off
     F11     Full-screen operator window
     Esc     Leave full-screen
 
@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -459,8 +459,8 @@ FEATURES = [
      "Goal, time left / over and progress bars on the timer cards"),
     ("backtime", "Features", "Back-timing",
      "Hard out, time to out, projected off air, cut / spare"),
-    ("dual", "Features", "Dual screen output",
-     "The presenter / floor output window"),
+    ("dual", "Features", "Output to monitor",
+     "The presenter / floor display on a second monitor"),
     ("sync", "Features", "Time source sync",
      "NTP or LTC timecode. Off: uses the PC clock"),
     ("undo", "Features", "Undo", f"Undo button, {MOD}Z and the undo pop-ups"),
@@ -477,16 +477,17 @@ FEATURES = [
     ("tick_together", "Screen", "Clocks tick together",
      "Segment and program clocks change on the same instant (the segment "
      "clock is lined up to within a second, without any visible jump)"),
-    ("fullscreen", "Screen", "Start full screen",
-     "Open DA Timer full screen (F11 / Esc still switch)"),
-    ("dual_on_start", "Screen", "Open the output screen on start",
-     "When a second screen is connected"),
+    ("fullscreen", "Screen", "Start in full screen GUI",
+     "Open DA Timer full screen (the Full screen GUI button, F11 or Esc "
+     "switch it)"),
+    ("dual_on_start", "Screen", "Start output to monitor on launch",
+     "When a second monitor is connected"),
     ("confirm_reset", "Safety", "Confirm before a program reset",
      "Ask before RESET clears the timers and segments"),
     ("undo_popups", "Safety", "Undo pop-ups",
      "Offer Undo after a reset, next segment or clearing the log"),
     ("shortcuts", "Safety", "Single-key shortcuts",
-     "Space start/stop, N next, D dual, L list, T clock, G goals. "
+     "Space start/stop, N next, D output, L list, T clock, G goals. "
      f"{MOD} shortcuts always work"),
     ("keep_awake", "Safety", "Keep the computer awake",
      "No sleep, screensaver or screen blanking while a clock is running"),
@@ -1631,7 +1632,7 @@ class OutputLayoutEditor(tk.Toplevel):
         self.transient(master)
         self.resizable(False, False)
 
-        tk.Label(self, text="Output screen layout", bg=SURFACE, fg=TEXT,
+        tk.Label(self, text="Output to monitor: layout", bg=SURFACE, fg=TEXT,
                  font=(UI_BOLD, 16)).grid(row=0, column=0, columnspan=2,
                                           sticky="w")
         tk.Label(self, text=f"{show['name']}  ·  changes show on the "
@@ -1975,7 +1976,7 @@ class ShowEditor(tk.Toplevel):
         ModernButton.sized(cf, "Reset", self.reset_colours, SURFACE,
                            font_px=12).pack(side="left")
         r += 1
-        tk.Label(self, text="Output screen", **lab).grid(row=r, column=0,
+        tk.Label(self, text="Output to monitor", **lab).grid(row=r, column=0,
                                                          sticky="w",
                                                          pady=(12, 0))
         lf = tk.Frame(self, bg=SURFACE)
@@ -2149,7 +2150,7 @@ class FontDialog(tk.Toplevel):
                  font=(UI_BOLD, 18)).grid(row=0, column=0, columnspan=3,
                                           sticky="w")
         tk.Label(self, text="Changes apply straight away, here and on the "
-                            "output screen. Type to search the list.",
+                            "output monitor. Type to search the list.",
                  bg=SURFACE, fg=MUTED, font=(UI_FONT, 11)).grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(0, 14))
 
@@ -3802,8 +3803,12 @@ class DATimerApp:
         self.ou["show"][0].bind("<Button-1>", lambda e: self.open_plan())
 
         # Bottom toolbar, grouped: output | panels | show | devices
-        self.dual_btn = self._tool("Dual screen", self.toggle_dual)
-        self.screen_btn = self._tool("Output screen ▾", self.pick_screen)
+        self.dual_btn = self._tool("Output to monitor", self.toggle_dual)
+        # the ▾ half of the output button: which monitor, layout
+        self.screen_btn = ModernButton.sized(
+            self.root, "\u25be", self.pick_screen, SURFACE, "ghost",
+            font_px=15, height=38, pad_x=10, tracking=0.01)
+        self.screen_btn.menu_label = "Output to monitor settings\u2026"
         self.segtimes_btn = self._tool("Running order", self.toggle_seg_panel)
         self.log_btn = self._tool("Log", self.toggle_log_panel)
         self.tod_btn = self._tool("Clock", self.toggle_tod)
@@ -3817,7 +3822,7 @@ class DATimerApp:
         self.undo_btn = self._tool("Undo", self.undo, "neutral")
         self.settings_btn = self._tool("Settings", self.open_settings,
                                        "neutral")
-        self.full_btn = self._tool("Full screen", self.toggle_fullscreen,
+        self.full_btn = self._tool("Full screen GUI", self.toggle_fullscreen,
                                    "ghost")
         self.undo_btn.set_enabled(False)
         self.tool_groups = [(self.undo_btn,),
@@ -4103,6 +4108,8 @@ class DATimerApp:
                     self._overflow.append(b)
                     b.place_forget()
                     continue
+                if b is self.screen_btn:     # ▾ sits against its button
+                    bx -= px(3)
                 put(b, bx, ty + (tbh - bh) / 2, bw, bh)
                 bx += bw + px(4)
         if self._overflow:
@@ -4904,7 +4911,7 @@ class DATimerApp:
                        fg=TEXT, activebackground=CYAN_DIM,
                        activeforeground=CYAN, bd=0, relief="flat")
         for b in self._overflow:
-            label = b.text
+            label = getattr(b, "menu_label", None) or b.text
             if b.variant == "on":
                 label = "\u2714 " + label
             menu.add_command(label=label, command=b.command)

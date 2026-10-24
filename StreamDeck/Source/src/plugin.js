@@ -373,7 +373,7 @@ function design(c, holding) {
             sub: "hold 1 sec", subColor: C.muted, bar: C.red };
     case "display": {
       const target = c.settings.target || "dual";
-      const names = { dual: "DUAL SCRN", tod: "TOD", log: "LOG",
+      const names = { dual: "OUTPUT", tod: "TOD", log: "LOG",
         segments: "SEGMENTS" };
       const on = !!t[target];
       return { label: names[target] || target.toUpperCase(),

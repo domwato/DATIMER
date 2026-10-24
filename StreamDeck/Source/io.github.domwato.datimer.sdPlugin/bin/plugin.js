@@ -4147,7 +4147,7 @@ function design(c, holding) {
     case "display": {
       const target = c.settings.target || "dual";
       const names = {
-        dual: "DUAL SCRN",
+        dual: "OUTPUT",
         tod: "TOD",
         log: "LOG",
         segments: "SEGMENTS"

@@ -54,7 +54,7 @@ OPTIONS = {
                   ("none", "Nothing (display only)")],
     },
     "display": {
-        "target": [("dual", "Dual screen output"), ("tod", "TOD clock"),
+        "target": [("dual", "Output to monitor"), ("tod", "TOD clock"),
                    ("log", "Log panel"), ("segments", "Segments panel")],
     },
 }
@@ -292,7 +292,7 @@ def design(key, state, holding=False):
                     sub_color=C["text"] if last else C["faint"])
     if action == "display":
         target = key.get("target", "dual")
-        names = {"dual": "DUAL SCRN", "tod": "TOD", "log": "LOG",
+        names = {"dual": "OUTPUT", "tod": "TOD", "log": "LOG",
                  "segments": "SEGMENTS"}
         on = bool(t.get(target))
         return dict(label=names.get(target, target.upper()),
