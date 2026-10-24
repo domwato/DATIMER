@@ -1,16 +1,16 @@
 # Windows file properties for DA_Timer.exe (used by Build EXE.bat)
 VSVersionInfo(
-  ffi=FixedFileInfo(filevers=(7, 6, 0, 0), prodvers=(7, 6, 0, 0),
+  ffi=FixedFileInfo(filevers=(7, 7, 0, 0), prodvers=(7, 7, 0, 0),
                     mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1,
                     subtype=0x0, date=(0, 0)),
   kids=[
     StringFileInfo([StringTable('040904B0', [
       StringStruct('FileDescription', 'DA Timer'),
-      StringStruct('FileVersion', '7.6'),
+      StringStruct('FileVersion', '7.7'),
       StringStruct('InternalName', 'DA_Timer'),
       StringStruct('OriginalFilename', 'DA_Timer.exe'),
       StringStruct('ProductName', 'DA Timer'),
-      StringStruct('ProductVersion', '7.6')])]),
+      StringStruct('ProductVersion', '7.7')])]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]
 )

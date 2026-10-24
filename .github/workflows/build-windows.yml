@@ -1,0 +1,60 @@
+# Builds DA_Timer.exe on GitHub's Windows machines.
+# Actions tab -> "Build Windows app" -> Run workflow, then download the zip
+# from the finished run's "Artifacts".
+name: Build Windows app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: x64          # hidapi.dll is 64-bit
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip pyinstaller pillow openpyxl numpy sounddevice
+
+      - name: Build DA_Timer.exe
+        shell: bash
+        run: |
+          python -m PyInstaller --noconfirm --onefile --windowed --name DA_Timer \
+            --icon stopwatch.ico --version-file version_info.txt \
+            --add-data "stopwatch.ico;." --add-data "author_logo.png;." \
+            --add-data "fonts;fonts" --add-binary "hidapi.dll;." \
+            --paths vendor --collect-submodules StreamDeck \
+            --hidden-import da_deck --hidden-import da_sync \
+            --hidden-import PIL.ImageTk --hidden-import PIL._tkinter_finder \
+            --collect-all sounddevice \
+            da_timer.py
+
+      - name: Check the app starts
+        shell: pwsh
+        run: |
+          $env:APPDATA = "$env:RUNNER_TEMP\datimer-test"
+          $p = Start-Process -FilePath "dist\DA_Timer.exe" -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) { Write-Error "DA_Timer.exe quit or crashed on start (exit $($p.ExitCode))"; exit 1 }
+          Write-Host "DA_Timer.exe is running - good"
+          Stop-Process -Id $p.Id -Force
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force pkg | Out-Null
+          Copy-Item dist\DA_Timer.exe pkg\
+          Copy-Item "DA Timer Help.pdf" pkg\
+          Copy-Item "StreamDeck\DA Timer.streamDeckPlugin" pkg\
+          Compress-Archive -Path pkg\* -DestinationPath DA-Timer-windows.zip
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: DA-Timer-windows
+          path: DA-Timer-windows.zip

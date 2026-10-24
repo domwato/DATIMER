@@ -19,5 +19,5 @@ See **DA Timer Help.pdf** for how to use it.
 
 ## Build it
 
-* **Windows .exe:** run `Build EXE.bat` on Windows.
+* **Windows .exe:** go to Actions → **Build Windows app** → Run workflow, then download it from Artifacts. Or run `Build EXE.bat` on a Windows PC.
 * **Mac .app:** go to Actions → **Build Mac app** → Run workflow, then download the zips from Artifacts. See `MAC - READ ME.txt`.

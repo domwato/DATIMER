@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "7.6"
+VERSION = "7.7"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -348,6 +348,37 @@ def enable_dpi_awareness():
             pass
 
 
+class KeepAwake:
+    """Stop the computer sleeping or blanking the screen while the clocks
+    run (Windows: SetThreadExecutionState, Mac: caffeinate)."""
+
+    def __init__(self):
+        self.on = False
+        self._proc = None
+
+    def set(self, on):
+        if on == self.on:
+            return
+        self.on = on
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ES_CONTINUOUS, ES_SYSTEM, ES_DISPLAY = \
+                    0x80000000, 0x00000001, 0x00000002
+                flags = ES_CONTINUOUS | ((ES_SYSTEM | ES_DISPLAY) if on else 0)
+                ctypes.windll.kernel32.SetThreadExecutionState(flags)
+            elif IS_MAC:
+                import subprocess
+                if on:
+                    self._proc = subprocess.Popen(
+                        ["caffeinate", "-d", "-i", "-w", str(os.getpid())])
+                elif self._proc is not None:
+                    self._proc.terminate()
+                    self._proc = None
+        except Exception:
+            pass
+
+
 def get_monitors(root):
     """Return a list of dicts: x, y, w, h, primary, name."""
     if sys.platform == "win32":
@@ -457,6 +488,8 @@ FEATURES = [
     ("shortcuts", "Safety", "Single-key shortcuts",
      "Space start/stop, N next, D dual, L list, T clock, G goals. "
      f"{MOD} shortcuts always work"),
+    ("keep_awake", "Safety", "Keep the computer awake",
+     "No sleep, screensaver or screen blanking while a clock is running"),
     ("autosave", "Safety", "Crash recovery",
      "Save the timers every 2 seconds so they can be restored after a crash"),
     ("auto_log", "Safety", "Log button presses automatically",
@@ -1387,6 +1420,9 @@ class OutputView(tk.Frame):
             for w in widgets:
                 w.configure(fg=colour(eid))
         self.status_colour = (rows.get("seg_status") or {}).get("colour", "")
+        self.seg_colour = colour("seg_time")
+        self.seg_time.set_text(self.seg_time.cget("text") or "00:00:00",
+                               "+00:00:00")
         self.clock_cap.configure(fg=accent)
         self.rule.configure(bg=accent)
         seg_lbl = show["segment_label"].upper()
@@ -1467,9 +1503,13 @@ class OutputView(tk.Frame):
             if self.clock_time.cget("text") != clock_text:
                 self.clock_time.config(text=clock_text)
 
-    def update_times(self, seg, show, status="", status_fg=None):
+    def update_times(self, seg, show, status="", status_fg=None,
+                     seg_fg=None):
         if self.seg_time.cget("text") != seg:
             self.seg_time.config(text=seg)
+        want = seg_fg or self.seg_colour
+        if self.seg_time.cget("fg") != want:
+            self.seg_time.config(fg=want)
         if self.show_time.cget("text") != show:
             self.show_time.config(text=show)
         if self.seg_status.cget("text") != status:
@@ -1491,12 +1531,35 @@ class OutputWindow(tk.Toplevel):
         self.view = OutputView(self, show)
         self.view.place(relx=0, rely=0, relwidth=1, relheight=1)
         self._bind_dbl(self.view)
+        self._cursor_job = None
+        self._hide_cursor_soon()
         self.bind("<Double-Button-1>", self.toggle_fullscreen)
+        self.bind("<Motion>", self._mouse_moved, add="+")
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.go_fullscreen()
 
+    def _set_cursor(self, cursor):
+        stack = [self]
+        while stack:
+            w = stack.pop()
+            try:
+                w.configure(cursor=cursor)
+            except tk.TclError:
+                pass
+            stack.extend(w.winfo_children())
+
+    def _hide_cursor_soon(self):
+        if self._cursor_job:
+            self.after_cancel(self._cursor_job)
+        self._cursor_job = self.after(2000, lambda: self._set_cursor("none"))
+
+    def _mouse_moved(self, _e=None):
+        self._set_cursor("")
+        self._hide_cursor_soon()
+
     def _bind_dbl(self, w):
         w.bind("<Double-Button-1>", self.toggle_fullscreen)
+        w.bind("<Motion>", self._mouse_moved, add="+")
         for c in w.winfo_children():
             self._bind_dbl(c)
 
@@ -1698,6 +1761,13 @@ class OutputLayoutEditor(tk.Toplevel):
                                    r, segments_left=bool(v.get()))
                                ).pack(side="left")
                 extra._var = v
+            if eid == "seg_time":
+                count = r.get("count") or "up"
+                for val, text in (("up", "Count up"), ("down", "Count down")):
+                    ModernButton(extra, text, lambda r=r, val=val: self._set(
+                        r, count=val), SURFACE,
+                        "on" if count == val else "ghost", font_px=10,
+                        size=(84, 24)).pack(side="left", padx=(0, 4))
             if eid == "clock":
                 mode = r.get("mode") or "tod"
                 for val, text in (("tod", "TOD"), ("tc", "Timecode")):
@@ -1770,10 +1840,10 @@ class OutputLayoutEditor(tk.Toplevel):
     def _tick(self):
         if not self.winfo_exists():
             return
-        seg, show, status, col, caption, ccap, ctext = \
+        seg, show, status, col, caption, ccap, ctext, scol = \
             self.app.output_values(self.show)
         self.preview.update_times(seg, show, status or "+00:12 OVER",
-                                  col or RED)
+                                  col or RED, scol)
         self.preview.update_extras(caption, ccap or "TIME OF DAY",
                                    ctext or f"{datetime.now():%H:%M:%S}")
         self.after(250, self._tick)
@@ -3512,6 +3582,7 @@ class DATimerApp:
         self._last_layout = None
         self._out_status = ("", None)
         root._da_app = self               # lets dialogs reach the app
+        self.awake = KeepAwake()
         fc = self.settings.get("fonts") or {}
         fams = set(tkfont.families(root))
         FONT_CHOICE.update(
@@ -4271,7 +4342,8 @@ class DATimerApp:
             self._update_overunder()
         if self.output is not None:
             status, col = self._out_status
-            self.output.update_times(seg, show, status, col)
+            oseg, ocol = self._out_seg_clock()
+            self.output.update_times(oseg, show, status, col, ocol)
             self.output.update_extras(self._out_seg_caption(),
                                       *self._out_clock())
         if self.tod_on:
@@ -4327,7 +4399,7 @@ class DATimerApp:
                 chip.place(x=int(pos[0] - chip.width_px), y=int(pos[1]),
                            width=chip.width_px, height=chip.h)
             digits.config(fg=TEXT if running else "#c4ccd6")
-        # Presets only while that timer is stopped (same as the original)
+        self.awake.set((seg or show) and self.feat("keep_awake"))
         self._update_overunder()
 
     def start_segment(self):
@@ -4443,6 +4515,19 @@ class DATimerApp:
     def _plan(self):
         return self.current_show.setdefault("plan", [])
 
+    def _out_seg_clock(self, show=None):
+        """The output's segment clock: counting up, or down to the goal and
+        then up again in red once it's over."""
+        show = show or self.current_show
+        el = self.segment.elapsed()
+        goal = self._goal(len(self.segment_times))
+        if output_row(show, "seg_time").get("count") != "down" or not goal:
+            return fmt(el), None
+        left = goal - int(el)
+        if left >= 0:
+            return fmt(left), (AMBER if left <= 15 else None)
+        return "+" + fmt(-left), RED
+
     def output_values(self, show=None):
         """Live values for an output view showing `show`."""
         show = show or self.current_show
@@ -4457,8 +4542,9 @@ class DATimerApp:
                 ccap, ctext = "TIMECODE", clk.ltc_tc
             else:
                 ccap, ctext = "TIME OF DAY", f"{clk.now():%H:%M:%S}"
-        return (fmt(self.segment.elapsed()), fmt(self.show.elapsed()),
-                status, col, self._out_seg_caption(show), ccap, ctext)
+        oseg, ocol = self._out_seg_clock(show)
+        return (oseg, fmt(self.show.elapsed()), status, col,
+                self._out_seg_caption(show), ccap, ctext, ocol)
 
     def preview_output_show(self, show):
         """Show a layout being edited on the real output, live."""
