@@ -4,8 +4,8 @@
   "description": "DA Timer Stream Deck plugin",
   "main": "index.js",
   "scripts": {
-    "build": "esbuild src/plugin.js --bundle --platform=node --target=node20 --format=cjs --outfile=com.gravitymedia.datimer.sdPlugin/bin/plugin.js",
-    "pack": "npm run build && streamdeck pack com.gravitymedia.datimer.sdPlugin --output dist --force"
+    "build": "esbuild src/plugin.js --bundle --platform=node --target=node20 --format=cjs --outfile=io.github.domwato.datimer.sdPlugin/bin/plugin.js",
+    "pack": "npm run build && streamdeck pack io.github.domwato.datimer.sdPlugin --output dist --force"
   },
   "keywords": [],
   "author": "",

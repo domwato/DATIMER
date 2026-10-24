@@ -21,3 +21,9 @@ See **DA Timer Help.pdf** for how to use it.
 
 * **Windows .exe:** go to Actions → **Build Windows app** → Run workflow, then download it from Artifacts. Or run `Build EXE.bat` on a Windows PC.
 * **Mac .app:** go to Actions → **Build Mac app** → Run workflow, then download the zips from Artifacts. See `MAC - READ ME.txt`.
+
+## Licence
+
+MIT - see `LICENSE`. Third-party parts keep their own licences (`THIRD-PARTY-LICENSES.txt`).
+
+Not affiliated with or endorsed by any broadcaster or by Elgato.

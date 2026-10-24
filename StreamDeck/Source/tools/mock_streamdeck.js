@@ -2,7 +2,7 @@
 const { WebSocketServer } = require("ws");
 const { spawn } = require("child_process");
 const fs = require("fs");
-const PREFIX = "com.gravitymedia.datimer.";
+const PREFIX = "io.github.domwato.datimer.";
 const keys = [
   ["clock", { source: "segment" }], ["clock", { source: "program" }],
   ["clock", { source: "seg_delta" }], ["clock", { source: "prog_delta" }],
@@ -42,4 +42,4 @@ wss.on("connection", (sock) => {
     process.exit(0);
   })();
 });
-spawn("node", ["com.gravitymedia.datimer.sdPlugin/bin/plugin.js", "-port", "28196", "-pluginUUID", "PLUGINUUID", "-registerEvent", "registerPlugin", "-info", "{}"], { stdio: "inherit" });
+spawn("node", ["io.github.domwato.datimer.sdPlugin/bin/plugin.js", "-port", "28196", "-pluginUUID", "PLUGINUUID", "-registerEvent", "registerPlugin", "-info", "{}"], { stdio: "inherit" });

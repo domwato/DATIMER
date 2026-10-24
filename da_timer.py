@@ -83,7 +83,7 @@ VERSION = "7.7"
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
 # colours for state (green running, red stopped/over, amber warning) and
-# Gravity cyan kept for brand accents and selection.
+# Cyan kept for accents and selection.
 # --------------------------------------------------------------------------
 BG = "#0d1116"          # app background
 SURFACE = "#151b22"     # panels, cards, header, toolbar
@@ -93,7 +93,7 @@ BORDER = "#27313d"
 TEXT = "#e8edf2"
 MUTED = "#8b97a6"
 FAINT = "#4d5967"
-CYAN = "#00e5f0"        # Gravity cyan
+CYAN = "#00e5f0"        # accent cyan
 CYAN_DIM = "#06363c"
 GREEN = "#2bd47d"
 GREEN_DIM = "#0f3524"

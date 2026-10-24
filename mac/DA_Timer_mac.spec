@@ -31,7 +31,7 @@ coll = COLLECT(exe, a.binaries, a.datas, name="DA Timer")
 app = BUNDLE(
     coll, name="DA Timer.app",
     icon=os.path.join(ROOT, "stopwatch.ico"),
-    bundle_identifier="com.gravitymedia.datimer",
+    bundle_identifier="io.github.domwato.datimer",
     version=VERSION,
     info_plist={
         "CFBundleShortVersionString": VERSION,

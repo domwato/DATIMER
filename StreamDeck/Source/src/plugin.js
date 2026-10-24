@@ -13,7 +13,7 @@ const args = {};
 for (let i = 2; i < process.argv.length - 1; i += 2) {
   args[process.argv[i].replace(/^-+/, "")] = process.argv[i + 1];
 }
-const PREFIX = "com.gravitymedia.datimer.";
+const PREFIX = "io.github.domwato.datimer.";
 const DEFAULT_HOST = "127.0.0.1:47800";
 const POLL_MS = 250;
 const HOLD_MS = 1000;

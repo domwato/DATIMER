@@ -1,6 +1,6 @@
 import math, os
 from PIL import Image, ImageDraw, ImageFont
-OUT = "/home/claude/sdplugin/com.gravitymedia.datimer.sdPlugin/imgs"
+OUT = "./io.github.domwato.datimer.sdPlugin/imgs"
 os.makedirs(OUT + "/actions", exist_ok=True); os.makedirs(OUT + "/keys", exist_ok=True)
 BG, CYAN, WHITE = (10, 13, 17, 255), (0, 229, 240, 255), (255, 255, 255, 255)
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
