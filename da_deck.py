@@ -455,7 +455,12 @@ class DeckController:
                 time.sleep(0.5)
                 continue
             if self.deck is None:
-                if now - last_scan >= RESCAN_INTERVAL:
+                # USB library missing: check far less often (each check is
+                # slow), a missing Stream Deck: check every RESCAN_INTERVAL
+                wait = 15 if self.status.startswith(("Can't reach USB",
+                                                     "USB error")) \
+                    else RESCAN_INTERVAL
+                if now - last_scan >= wait:
                     last_scan = now
                     self._connect()
                 time.sleep(0.2)

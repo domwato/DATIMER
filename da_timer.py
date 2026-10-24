@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "1.0"
+VERSION = "1.0.1"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -582,6 +582,8 @@ def copy_show(show):
     out["plan"] = [dict(row) for row in show.get("plan") or []]
     out["hard_out"] = dict(DEFAULT_SHOW["hard_out"],
                            **(show.get("hard_out") or {}))
+    if show.get("output_layout"):
+        out["output_layout"] = [dict(r) for r in show["output_layout"]]
     return out
 
 
@@ -4568,6 +4570,8 @@ class DATimerApp:
         if not output_row(show, "seg_title").get("segments_left") or not prog:
             return label
         n, total, left = prog
+        if n > total:
+            return f"{label} {n} OF {total}  \u00b7  {n - total} EXTRA"
         return f"{label} {n} OF {total}  \u00b7  {left} LEFT"
 
     def _out_clock(self):
@@ -4669,7 +4673,9 @@ class DATimerApp:
         cap = f"{show['segment_label']} {n}"
         prog = self._seg_progress()
         if prog:
-            cap += f" of {prog[1]}  \u00b7  {prog[2]} left"
+            cap += (f" of {prog[1]}  \u00b7  {prog[0] - prog[1]} extra"
+                    if prog[0] > prog[1] else
+                    f" of {prog[1]}  \u00b7  {prog[2]} left")
         nxt = self._seg_name(n + 1)
         if nxt and self.feat("next_hint"):
             cap += f"      Next: {nxt}"
@@ -4718,7 +4724,9 @@ class DATimerApp:
         prog = self._seg_progress()
         if prog:
             self._cfg(self.show_title_lbl,
-                      text=f"{prog[1]} segments  \u00b7  {prog[2]} left")
+                      text=f"{prog[1]} segments  \u00b7  "
+                           + (f"{prog[0] - prog[1]} extra" if prog[0] > prog[1]
+                              else f"{prog[2]} left"))
         if plan_total:
             self._cfg(g_lbl, text=f"Plan {fmt_short(plan_total)}", fg=MUTED)
             if not prog:
@@ -5244,13 +5252,14 @@ class DATimerApp:
 
     # ---------------------------------------------------------- back-time --
     def _backtime_on(self):
-        if not self.feat("backtime"):
-            return False
-        ho = self.current_show.get("hard_out") or {}
-        return ho.get("mode") in ("tod", "trt")
+        # Same test as _backtime(): the band shows exactly when there is
+        # something to show (a mismatch made the screen re-lay out non-stop)
+        return self._backtime() is not None
 
     def _backtime(self):
         """Live back-timing against the show's hard out (or None)."""
+        if not self.feat("backtime"):
+            return None
         ho = self.current_show.get("hard_out") or {}
         mode = ho.get("mode")
         if mode not in ("tod", "trt"):
@@ -5310,7 +5319,10 @@ class DATimerApp:
 
     def _update_backtime(self):
         bt = self._bt = self._backtime()
-        if (bt is not None) != bool(self.bt_panel.winfo_ismapped()):
+        # Compare with what the last layout did, not winfo_ismapped(): a
+        # widget only reports mapped once Tk has drawn it, so asking right
+        # after a layout re-ran the layout over and over
+        if (bt is not None) != (self._last_layout or (None,) * 7)[6]:
             self._layout(force=True)
         if bt is None:
             return
