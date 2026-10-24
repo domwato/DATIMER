@@ -30,7 +30,7 @@ Key actions (both ways)
   Next Segment         Shows the next segment number and name
   Log Mark             Timestamped MARK in the log
   Reset Program        HOLD 1 second (a tap does nothing - safety)
-  Display Toggle       Dual screen / TOD / log panel / segments panel
+  Display Toggle       Output to monitor / TOD / log panel / segments panel
   Undo Last Action     Undo a reset, next segment, stop/start or preset
 
 Other controllers (Bitfocus Companion, generic HTTP)
