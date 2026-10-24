@@ -1,8 +1,7 @@
 # DA Timer
 
-<img src="author_logo_dark.png" height="40" alt="DW logo">
+<img src="author_logo_dark.png" height="40" alt="Logo">
 
-By DW · © 2026 DW
 
 Segment and program timer for broadcast Director's Assistants. It runs with a dual-screen output on Windows and Mac.
 

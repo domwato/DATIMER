@@ -6,7 +6,7 @@ import sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
-VERSION = "7.4"
+VERSION = "7.5"
 sys.path.insert(0, os.path.join(ROOT, "vendor"))   # vendored StreamDeck lib
 
 datas = [(os.path.join(ROOT, "fonts"), "fonts"),
@@ -35,7 +35,6 @@ app = BUNDLE(
     version=VERSION,
     info_plist={
         "CFBundleShortVersionString": VERSION,
-        "NSHumanReadableCopyright": "\u00a9 2026 DW",
         "NSHighResolutionCapable": True,
         # LTC timecode comes in through an audio input
         "NSMicrophoneUsageDescription":

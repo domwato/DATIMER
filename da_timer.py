@@ -56,9 +56,6 @@ except ImportError:  # Pillow optional
     Image = ImageTk = None
 
 APP_NAME = "DA Timer"
-AUTHOR = "DW"
-CREDIT = f"{APP_NAME} by {AUTHOR}"
-COPYRIGHT = f"\u00a9 2026 {AUTHOR}"
 # The author's logo: author_logo.png next to da_timer.py (bundled into the
 # Windows exe and the Mac app). Shown in Settings and the header.
 AUTHOR_LOGO = "author_logo.png"
@@ -81,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "7.4"
+VERSION = "7.5"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -517,6 +514,9 @@ DEFAULT_SHOW = {
     "accent": OUT_ACCENT,
     "plan": [],              # [{"name": str, "goal": seconds}, ...]
     "output_goals": False,   # show segment time left/over on the output
+    "segment_count": 0,      # segments in the show (0 = count the running order)
+    "output_clock": "off",   # clock on the output: "off" | "tod" | "tc"
+    "output_segments": True, # "SEGMENT 3 OF 8 - 5 LEFT" on the output
     # Hard out for back-timing: mode "off" | "tod" (off-air time of day)
     # | "trt" (total program length)
     "hard_out": {"mode": "off", "tod": "", "trt": 0},
@@ -1292,6 +1292,10 @@ class OutputWindow(tk.Toplevel):
                                    family=UI_BOLD)
         self.show_time = FitLabel(self, "00:00:00", text="00:00:00")
         self.message_lbl = FitLabel(self, " ", fill=0.7, family=UI_BOLD)
+        self.clock_cap = FitLabel(self, "TOD", fill=0.6, family=UI_BOLD,
+                                  anchor="e")
+        self.clock_time = FitLabel(self, "00:00:00", fill=0.85,
+                                   anchor="w")
         self.rule = tk.Frame(self, height=2)
         for w in self.winfo_children():
             w.bind("<Double-Button-1>", self.toggle_fullscreen)
@@ -1311,11 +1315,15 @@ class OutputWindow(tk.Toplevel):
                 w.configure(fg=fg)
         self.seg_title.configure(fg=accent)
         self.show_title.configure(fg=accent)
+        self.clock_cap.configure(fg=accent)
         self.rule.configure(bg=accent)
 
         seg_lbl = show["segment_label"].upper()
         show_lbl = show["show_label"].upper()
         longest = max(seg_lbl, show_lbl, "SEGMENT TIME", key=len)
+        if show.get("output_segments", True):
+            longest = max(longest, f"{seg_lbl} 88 OF 88  \u00b7  88 LEFT",
+                          key=len)
         self.seg_title.set_text(seg_lbl, longest)
         self.show_title.set_text(show_lbl, longest)
         self.title_lbl.set_text(show["title"])
@@ -1336,6 +1344,12 @@ class OutputWindow(tk.Toplevel):
         if show.get("output_goals"):
             bands.append(("seg_status", 1.1))
         bands += [("show_title", 1.4), ("show_time", 5)]
+        self.clock_mode = show.get("output_clock") or "off"
+        if self.clock_mode != "off":
+            bands.append(("clock", 2.4))
+            self.clock_time.set_text(
+                "", "00:00:00:00" if self.clock_mode == "tc" else "00:00:00")
+            self.clock_cap.set_text("TOD", "TOD")
         if has_msg:
             bands.append(("message", 1.4))
         total = sum(wgt for _, wgt in bands)
@@ -1353,6 +1367,11 @@ class OutputWindow(tk.Toplevel):
                 else:
                     self.title_lbl.place(relx=0.02, rely=y, relwidth=0.96,
                                          relheight=h)
+            elif name == "clock":
+                self.clock_cap.place(relx=0.02, rely=y, relwidth=0.2,
+                                     relheight=h)
+                self.clock_time.place(relx=0.24, rely=y, relwidth=0.7,
+                                      relheight=h)
             elif name == "message":
                 self.rule.place(relx=0.25, rely=y, relwidth=0.5, height=2)
                 self.message_lbl.place(relx=0, rely=y, relwidth=1,
@@ -1393,6 +1412,15 @@ class OutputWindow(tk.Toplevel):
             self.go_fullscreen()
         else:
             self.go_windowed()
+
+    def update_extras(self, seg_caption, clock_cap, clock_text):
+        if self.seg_title.cget("text") != seg_caption:
+            self.seg_title.config(text=seg_caption)
+        if self.clock_mode != "off":
+            if self.clock_cap.cget("text") != clock_cap:
+                self.clock_cap.config(text=clock_cap)
+            if self.clock_time.cget("text") != clock_text:
+                self.clock_time.config(text=clock_text)
 
     def update_times(self, seg, show, status="", status_fg=None):
         if self.seg_time.cget("text") != seg:
@@ -1515,6 +1543,35 @@ class ShowEditor(tk.Toplevel):
                        font=(UI_FONT, 10)).grid(row=r, column=1, columnspan=3,
                                                 sticky="w", pady=(10, 0))
         r += 1
+        self.output_segs_var = tk.BooleanVar(
+            value=bool(self.show.get("output_segments", True)))
+        tk.Checkbutton(self, text="Show \u201cSegment 3 of 8 \u00b7 5 left\u201d on "
+                                  "the output screen",
+                       variable=self.output_segs_var, bg=SURFACE, fg=TEXT,
+                       selectcolor=BG, activebackground=SURFACE,
+                       activeforeground=TEXT, highlightthickness=0, bd=0,
+                       font=(UI_FONT, 10)).grid(row=r, column=1, columnspan=3,
+                                                sticky="w", pady=(4, 0))
+        r += 1
+        tk.Label(self, text="Output clock", **lab).grid(row=r, column=0,
+                                                        sticky="w",
+                                                        pady=(10, 0))
+        self.output_clock_var = tk.StringVar(
+            value=self.show.get("output_clock") or "off")
+        oc = tk.Frame(self, bg=SURFACE)
+        oc.grid(row=r, column=1, columnspan=3, sticky="w", pady=(10, 0))
+        for val, text in (("off", "Off"), ("tod", "Time of day"),
+                          ("tc", "Timecode (LTC)")):
+            tk.Radiobutton(oc, text=text, value=val,
+                           variable=self.output_clock_var, bg=SURFACE,
+                           fg=TEXT, selectcolor=BG, activebackground=SURFACE,
+                           activeforeground=TEXT, highlightthickness=0,
+                           font=(UI_FONT, 10)).pack(side="left", padx=(0, 12))
+        r += 1
+        tk.Label(self, text="Timecode needs Time source set to LTC; until it "
+                            "locks the output shows time of day.",
+                 **hint).grid(row=r, column=1, columnspan=3, sticky="w")
+        r += 1
 
         # Save / cancel
         bf = tk.Frame(self, bg=SURFACE)
@@ -1585,6 +1642,8 @@ class ShowEditor(tk.Toplevel):
         for k, v in self.vars.items():
             self.show[k] = v.get().strip()
         self.show["output_goals"] = bool(self.output_goals_var.get())
+        self.show["output_segments"] = bool(self.output_segs_var.get())
+        self.show["output_clock"] = self.output_clock_var.get()
         if not self.show["name"]:
             messagebox.showwarning(APP_NAME, "Give the show a name.",
                                    parent=self)
@@ -1880,7 +1939,7 @@ class SettingsDialog(tk.Toplevel):
         if self._logo is not None:
             tk.Label(about, image=self._logo, bg=SURFACE).pack(side="left",
                                                                padx=(0, 10))
-        tk.Label(about, text=f"{APP_NAME} v{VERSION}  \u00b7  {COPYRIGHT}",
+        tk.Label(about, text=f"{APP_NAME} v{VERSION}",
                  bg=SURFACE, fg=MUTED,
                  font=(UI_FONT, 10)).pack(side="left")
 
@@ -2355,7 +2414,7 @@ class DeckSetup(tk.Toplevel):
 # --------------------------------------------------------------------------
 class PlanEditor(tk.Toplevel):
     def __init__(self, master, show_name, plan, on_save, start_at=None,
-                 hard_out=None):
+                 hard_out=None, segment_count=0):
         super().__init__(master)
         self.title(f"Segment Goals - {show_name}")
         self.configure(bg=SURFACE, padx=px(20), pady=px(16))
@@ -2371,6 +2430,26 @@ class PlanEditor(tk.Toplevel):
                  font=(UI_BOLD, 15)).grid(row=1, column=0,
                                                   columnspan=2, sticky="w",
                                                   pady=(0, 6))
+
+        # How many segments the show has (drives "segments left")
+        sc = tk.Frame(self, bg=BG, padx=px(12), pady=px(10),
+                      highlightthickness=1, highlightbackground=BORDER)
+        sc.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(14, 0))
+        tk.Label(sc, text="Segments in show", bg=BG, fg=TEXT,
+                 font=(UI_BOLD, 9)).grid(row=0, column=0, sticky="w",
+                                         padx=(0, 12))
+        self.count_var = tk.StringVar(
+            value=str(segment_count) if segment_count else "")
+        self.count_entry = tk.Entry(
+            sc, textvariable=self.count_var, width=5, justify="center",
+            bg=SURFACE, fg=TEXT, insertbackground=CYAN, relief="flat",
+            highlightthickness=1, highlightbackground=BORDER,
+            highlightcolor=CYAN, font=(DIGIT_FONT, 13))
+        self.count_entry.grid(row=0, column=1, ipady=3)
+        self.count_hint = tk.Label(sc, bg=BG, fg=FAINT, font=(UI_FONT, 9),
+                                   anchor="w")
+        self.count_hint.grid(row=0, column=2, sticky="w", padx=(12, 0))
+        self.count_var.trace_add("write", lambda *_: self._count_hint())
 
         # Hard out (back-timing)
         ho = tk.Frame(self, bg=BG, padx=px(12), pady=px(10), highlightthickness=1,
@@ -2403,10 +2482,14 @@ class PlanEditor(tk.Toplevel):
         self.ho_hint.grid(row=1, column=1, columnspan=4, sticky="w",
                           pady=(4, 0))
         self._ho_mode_changed(initial=True)
+        self._count_hint()
 
         self.tree = ttk.Treeview(self, columns=("num", "name", "goal"),
                                  show="headings", style="Dark.Treeview",
-                                 selectmode="browse", height=12)
+                                 selectmode="browse",
+                                 height=max(4, min(12, (
+                                     self.winfo_screenheight() - px(560))
+                                     // px(30))))
         for key, title, width, stretch, anchor in (
                 ("num", "#", 44, False, "center"),
                 ("name", "Segment", 300, True, "w"),
@@ -2497,6 +2580,7 @@ class PlanEditor(tk.Toplevel):
             self.tree.insert("", "end", iid=str(i), values=(
                 i + 1, row.get("name", ""),
                 fmt(row["goal"]) if row.get("goal") else "\u2014"))
+        self._count_hint()
         total = sum(r.get("goal") or 0 for r in self.plan)
         self.total_lbl.config(text=f"{len(self.plan)} segments  \u00b7  "
                                    f"planned total {fmt(total)}")
@@ -2655,6 +2739,33 @@ class PlanEditor(tk.Toplevel):
         self.plan.extend(rows)
         self._refresh()
 
+    def _read_count(self):
+        t = self.count_var.get().strip()
+        if not t:
+            return 0
+        if not t.isdigit() or not 0 <= int(t) <= 999:
+            raise ValueError(f"'{t}' isn't a number of segments.")
+        return int(t)
+
+    def _count_hint(self):
+        if not hasattr(self, "count_hint"):
+            return
+        listed = len(self.plan)
+        try:
+            n = self._read_count()
+        except ValueError:
+            self.count_hint.config(text="Type a number, e.g. 8", fg=AMBER)
+            return
+        if not n:
+            text = (f"Blank = use the {listed} listed below" if listed else
+                    "Blank = count the segments listed below")
+        elif listed and n != listed:
+            text = f"{listed} listed below \u2013 \u201csegments left\u201d " \
+                   f"counts from {n}"
+        else:
+            text = "Used for \u201csegments left\u201d"
+        self.count_hint.config(text=text, fg=FAINT)
+
     def _ho_mode_changed(self, initial=False):
         mode = self.ho_mode.get()
         if mode == "tod":
@@ -2699,9 +2810,15 @@ class PlanEditor(tk.Toplevel):
             messagebox.showwarning(APP_NAME, str(exc), parent=self)
             self.ho_entry.focus_set()
             return
+        try:
+            count = self._read_count()
+        except ValueError as exc:
+            messagebox.showwarning(APP_NAME, str(exc), parent=self)
+            self.count_entry.focus_set()
+            return
         if self.name_var.get().strip() or self.goal_var.get().strip():
             self.add_or_update()       # don't lose a half-typed row
-        self.on_save(self.plan, hard_out)
+        self.on_save(self.plan, hard_out, count)
         self.destroy()
 
 
@@ -2792,8 +2909,7 @@ def export_log_xlsx(path, show_name, log, segment_times, plan=None,
     mark_fill = PatternFill("solid", fgColor="FFF2CC")
 
     wb = Workbook()
-    wb.properties.creator = CREDIT
-    wb.properties.lastModifiedBy = CREDIT
+    wb.properties.creator = APP_NAME
     ws = wb.active
     ws.title = "Log"
     entries = log.entries
@@ -2818,7 +2934,7 @@ def export_log_xlsx(path, show_name, log, segment_times, plan=None,
             ("Entries", len(entries), "0"),
             ("Exported", datetime.now().replace(microsecond=0),
              "dd/mm/yyyy hh:mm:ss"),
-            ("Made with", f"{CREDIT} (v{VERSION})", "@")]
+            ("Made with", f"{APP_NAME} v{VERSION}", "@")]
     for i, (label, value, numfmt) in enumerate(meta, start=3):
         ws.cell(row=i, column=1, value=label).font = Font(bold=True)
         ws.merge_cells(start_row=i, start_column=1, end_row=i, end_column=3)
@@ -3174,7 +3290,7 @@ class DATimerApp:
         self.top_logo = LogoLabel(r, bg=SURFACE)
         self.app_mark = tk.Label(r, bg=SURFACE, bd=0)
         self._app_mark_h = None
-        self.app_lbl = tk.Label(r, text=f"{APP_NAME}  \u00b7  by {AUTHOR}",
+        self.app_lbl = tk.Label(r, text=APP_NAME,
                                 bg=SURFACE, fg=MUTED,
                                 anchor="w", font=(UI_FONT, 10))
         self.show_name_lbl = tk.Label(r, bg=SURFACE, fg=TEXT, anchor="w",
@@ -3278,7 +3394,7 @@ class DATimerApp:
         self.sync_pill = Pill(r, page_bg=SURFACE, height=30, font_px=14)
         self.status_lbl = tk.Label(r, bg=SURFACE, fg=FAINT, anchor="e",
                                    font=(UI_FONT, 10),
-                                   text=f"v{VERSION} \u00b7 {AUTHOR}")
+                                   text=f"v{VERSION}")
 
         # Running order panel
         sp = self.seg_panel = tk.Frame(r, bg=SURFACE)
@@ -3795,6 +3911,8 @@ class DATimerApp:
         if self.output is not None:
             status, col = self._out_status
             self.output.update_times(seg, show, status, col)
+            self.output.update_extras(self._out_seg_caption(),
+                                      *self._out_clock())
         if self.tod_on:
             tod = f"{self.clock.now():%H:%M:%S}"
             if self.tod_lbl.cget("text") != tod:
@@ -3964,6 +4082,43 @@ class DATimerApp:
     def _plan(self):
         return self.current_show.setdefault("plan", [])
 
+    def _out_seg_caption(self):
+        show = self.current_show
+        label = show["segment_label"].upper()
+        prog = self._seg_progress()
+        if not show.get("output_segments", True) or not prog:
+            return label
+        n, total, left = prog
+        return f"{label} {n} OF {total}  \u00b7  {left} LEFT"
+
+    def _out_clock(self):
+        """(caption, time text) for the output's clock band."""
+        mode = self.current_show.get("output_clock") or "off"
+        if mode == "off":
+            return "", ""
+        clk = self.clock
+        if mode == "tc" and clk.mode == "ltc" and clk.ltc_tc and \
+                clk.state == "ok":
+            return "TC", clk.ltc_tc
+        return "TOD", f"{clk.now():%H:%M:%S}"
+
+    def _seg_total(self):
+        """Segments in the show: the number set in Goals, else the running
+        order's length (0 = unknown)."""
+        try:
+            count = int(self.current_show.get("segment_count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        return count or len(self._plan())
+
+    def _seg_progress(self):
+        """(current segment, total, segments left after this one) or None."""
+        total = self._seg_total()
+        if not total:
+            return None
+        n = len(self.segment_times)
+        return n, total, max(total - n, 0)
+
     def _goal(self, n):
         plan = self._plan()
         return (plan[n - 1].get("goal") or None) if 0 < n <= len(plan) else None
@@ -4032,6 +4187,9 @@ class DATimerApp:
         goal, name = self._goal(n), self._seg_name(n)
 
         cap = f"{show['segment_label']} {n}"
+        prog = self._seg_progress()
+        if prog:
+            cap += f" of {prog[1]}  \u00b7  {prog[2]} left"
         nxt = self._seg_name(n + 1)
         if nxt and self.feat("next_hint"):
             cap += f"      Next: {nxt}"
@@ -4077,17 +4235,23 @@ class DATimerApp:
         plan_total = sum(p.get("goal") or 0 for p in self._plan())
         delta = self._total_delta()
         self._cfg(self.show_cap_lbl, text=show["show_label"])
+        prog = self._seg_progress()
+        if prog:
+            self._cfg(self.show_title_lbl,
+                      text=f"{prog[1]} segments  \u00b7  {prog[2]} left")
         if plan_total:
             self._cfg(g_lbl, text=f"Plan {fmt_short(plan_total)}", fg=MUTED)
-            self._cfg(self.show_title_lbl,
-                      text=f"{len(self._plan())} segments planned")
+            if not prog:
+                self._cfg(self.show_title_lbl,
+                          text=f"{len(self._plan())} segments planned")
             ratio = self.show.elapsed() / plan_total
             self._set_bar("show", ratio, RED if ratio > 1 else
                           AMBER if ratio > 0.95 else CYAN)
         else:
             self._cfg(g_lbl, text="No segment goals \u2013 click to plan the "
                                   "show", fg=FAINT)
-            self._cfg(self.show_title_lbl, text="Running time")
+            if not prog:
+                self._cfg(self.show_title_lbl, text="Running time")
             self._set_bar("show", 0, CYAN)
         if delta is None:
             self._cfg(d_lbl, text="")
@@ -4109,8 +4273,10 @@ class DATimerApp:
                 col = RED if delta > 0 else GREEN if delta < 0 else TEXT
             self._cfg(self.seg_total_lbl, text=txt, fg=col)
 
-    def _save_plan(self, plan, hard_out=None):
+    def _save_plan(self, plan, hard_out=None, segment_count=None):
         self.current_show["plan"] = [dict(r) for r in plan]
+        if segment_count is not None:
+            self.current_show["segment_count"] = int(segment_count)
         if hard_out is not None:
             old = self.current_show.get("hard_out") or {}
             self.current_show["hard_out"] = hard_out
@@ -4131,7 +4297,8 @@ class DATimerApp:
     def open_plan(self, start_at=None):
         PlanEditor(self.root, self.current_show["name"], self._plan(),
                    self._save_plan, start_at=start_at,
-                   hard_out=self.current_show.get("hard_out"))
+                   hard_out=self.current_show.get("hard_out"),
+                   segment_count=self.current_show.get("segment_count") or 0)
 
     def _seg_list_click(self, event):
         row = self.seg_list.identify_row(event.y)
@@ -4336,6 +4503,8 @@ class DATimerApp:
                 "running": self.segment.running,
                 "goal": goal, "delta": seg_delta, "state": seg_state,
                 "status": seg_status,
+                "total": self._seg_total() or None,
+                "left": (self._seg_progress() or (0, 0, None))[2],
             },
             "program": {
                 "label": show["show_label"], "seconds": int(prog_el),
