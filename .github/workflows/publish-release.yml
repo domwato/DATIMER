@@ -1,0 +1,81 @@
+# One-tap releases: Actions tab -> "Publish release" -> Run workflow,
+# type the version (e.g. 1.0.3). This creates the tag and release, builds
+# the Windows and Mac apps and attaches them to the release page.
+name: Publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number, e.g. 1.0.3 (must match VERSION in da_timer.py)"
+        required: true
+        type: string
+      notes:
+        description: "What's new (optional - a list of changes is added automatically)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check the version
+        id: v
+        env:
+          WANT: ${{ inputs.version }}
+        run: |
+          WANT="${WANT#v}"; WANT="${WANT#V}"
+          HAVE=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' da_timer.py)
+          if [ "$WANT" != "$HAVE" ]; then
+            echo "::error::You asked for $WANT but da_timer.py says VERSION = \"$HAVE\". Use $HAVE, or ask for the version number to be changed first."
+            exit 1
+          fi
+          if git rev-parse "v$WANT" >/dev/null 2>&1 || git rev-parse "V$WANT" >/dev/null 2>&1; then
+            echo "::error::Version $WANT has already been released."
+            exit 1
+          fi
+          echo "tag=v$WANT" >> "$GITHUB_OUTPUT"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          {
+            if [ -n "$NOTES" ]; then printf '%s\n\n' "$NOTES"; fi
+            echo "## Download"
+            echo
+            echo "| Computer | File |"
+            echo "| --- | --- |"
+            echo "| Windows 10/11 (64-bit) | **DA-Timer-windows.zip**: DA_Timer.exe, help PDF and Stream Deck plugin |"
+            echo "| Mac with Apple silicon (M1 and later) | **DA-Timer-mac-apple-silicon.zip** |"
+            echo "| Older Intel Mac | **DA-Timer-mac-intel.zip** |"
+            echo
+            echo "The downloads appear below about 5 minutes after the release is published."
+            echo
+            echo "The apps aren't signed, so the first time you open them: on Windows click \"More info\" then \"Run anyway\"; on a Mac go to System Settings → Privacy & Security → **Open Anyway**."
+          } > notes.md
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "DA Timer $TAG" \
+            --notes-file notes.md --generate-notes
+
+  windows:
+    needs: release
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+
+  mac:
+    needs: release
+    uses: ./.github/workflows/build-mac.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}

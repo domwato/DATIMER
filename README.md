@@ -17,6 +17,10 @@ See **DA Timer Help.pdf** for how to use it.
 * **Windows:** double-click `Run DA Timer.bat`. It needs 64-bit Python 3.12.
 * **Mac:** double-click `Run DA Timer.command`. It needs Python 3.12 from python.org.
 
+## Release a new version
+
+Actions → **Publish release** → Run workflow, then type the version number (it must match `VERSION` in `da_timer.py`). GitHub creates the release, builds the Windows and Mac apps and attaches them.
+
 ## Build it
 
 * **Windows .exe:** go to Actions → **Build Windows app** → Run workflow, then download it from Artifacts. Or run `Build EXE.bat` on a Windows PC.
