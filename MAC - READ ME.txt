@@ -16,7 +16,7 @@ ONE-OFF SETUP (about 10 minutes, all in a web browser)
      contents of that file from this folder.
 
 BUILD THE APP (each time you update DA Timer)
-4. Open the "Actions" tab -> "Build Mac app" -> "Run workflow".
+4. Open the "Actions" tab -> "Test build: Mac" -> "Run workflow".
 5. Wait ~5-10 minutes for the green tick, open the run, and download
    from "Artifacts" at the bottom:
      DA-Timer-mac-apple-silicon   M1/M2/M3/M4 Macs (2020 onwards)

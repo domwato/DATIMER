@@ -1,5 +1,5 @@
 # Builds DA_Timer.exe on GitHub's Windows machines.
-# Actions tab -> "Build Windows app" -> Run workflow, then download the zip
+# Actions tab -> "Test build: Windows" -> Run workflow, then download the zip
 # from the finished run's "Artifacts".
 name: "Test build: Windows"
 
