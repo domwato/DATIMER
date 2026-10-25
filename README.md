@@ -19,12 +19,12 @@ See **DA Timer Help.pdf** for how to use it.
 
 ## Release a new version
 
-Actions → **Publish release** → Run workflow, then type the version number (it must match `VERSION` in `da_timer.py`). GitHub creates the release, builds the Windows and Mac apps and attaches them.
+Actions → **Publish release (new version)** → Run workflow, then type the version number (it must match `VERSION` in `da_timer.py`). GitHub creates the release, builds the Windows and Mac apps and attaches them.
 
 ## Build it
 
-* **Windows .exe:** go to Actions → **Build Windows app** → Run workflow, then download it from Artifacts. Or run `Build EXE.bat` on a Windows PC.
-* **Mac .app:** go to Actions → **Build Mac app** → Run workflow, then download the zips from Artifacts. See `MAC - READ ME.txt`.
+* **Windows .exe:** go to Actions → **Test build: Windows** → Run workflow, then download it from Artifacts. Or run `Build EXE.bat` on a Windows PC.
+* **Mac .app:** go to Actions → **Test build: Mac** → Run workflow, then download the zips from Artifacts. See `MAC - READ ME.txt`.
 
 ## Licence
 

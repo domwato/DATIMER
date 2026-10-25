@@ -1,7 +1,7 @@
 # Builds the Mac version of DA Timer on GitHub's Mac machines.
 # Push this folder to a GitHub repo, then: Actions tab -> "Build Mac app"
 # -> Run workflow. Download the zips from the finished run's "Artifacts".
-name: Build Mac app
+name: "Test build: Mac"
 
 on:
   workflow_dispatch:

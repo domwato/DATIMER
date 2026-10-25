@@ -1,7 +1,7 @@
 # One-tap releases: Actions tab -> "Publish release" -> Run workflow,
 # type the version (e.g. 1.0.3). This creates the tag and release, builds
 # the Windows and Mac apps and attaches them to the release page.
-name: Publish release
+name: Publish release (new version)
 
 on:
   workflow_dispatch:
