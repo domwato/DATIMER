@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -4343,27 +4343,47 @@ class DATimerApp:
     def running(self):
         return self.show.running or self.segment.running
 
+    def _tod_phase(self):
+        """Where we are within the current time-of-day second (0-1).
+        Windows' clock moves in ~15 ms steps, so it's smoothed against the
+        steady monotonic clock rather than read raw each time."""
+        sample = self.clock.now().timestamp() - time.monotonic()
+        off = getattr(self, "_tod_off", None)
+        if off is None or abs(sample - off) > 0.25:   # first time / clock set
+            off = sample
+        else:
+            off += 0.05 * (sample - off)
+        self._tod_off = off
+        return (time.monotonic() + off) % 1.0
+
+    @staticmethod
+    def _nudge(sw, target):
+        """Move stopwatch `sw` so its fraction of a second matches `target`,
+        without the number on screen ever going backwards or skipping."""
+        e = sw.elapsed()
+        cur = e % 1.0
+        d = ((target - cur + 0.5) % 1.0) - 0.5        # shortest way round
+        if abs(d) < 0.004:
+            return
+        if abs(d) > 0.1:
+            # a one-off line-up (start, NEXT, preset): stay on the second
+            # that's showing, just move within it
+            d = target - cur
+        elif int(e + d) < int(e):
+            return                    # would tick backwards - wait instead
+        sw.started_at -= d
+
     def _lock_phase(self):
         """Keep every clock ticking over on the same instant: the program
         clock follows the time of day, the segment clock follows the
-        program. Each is nudged by under a second, without changing what it
-        shows, so nothing jumps or goes backwards."""
+        program. Each is moved by under a second at most, never backwards
+        and never skipping a number."""
         if not self.feat("tick_together"):
             return
         if self.show.running:
-            tod = self.clock.now().microsecond / 1e6
-            p = self.show.elapsed()
-            d = tod - (p % 1.0)
-            if abs(d) > 0.002 and 0 <= (p % 1.0) + d < 1.0:
-                self.show.started_at -= d
-        if not (self.show.running and self.segment.running):
-            return
-        p, s_ = self.show.elapsed(), self.segment.elapsed()
-        # Keep the second on screen, just move where in that second we are,
-        # so the display never jumps or goes backwards.
-        d = (p % 1.0) - (s_ % 1.0)
-        if abs(d) > 0.002:
-            self.segment.started_at -= d
+            self._nudge(self.show, self._tod_phase())
+        if self.show.running and self.segment.running:
+            self._nudge(self.segment, self.show.elapsed() % 1.0)
 
     def _tick(self):
         self._process_api()
@@ -4433,7 +4453,7 @@ class DATimerApp:
         if self.segment.running:
             frac.append(self.segment.elapsed() % 1.0)
         if self.tod_on or self.output is not None:
-            frac.append(self.clock.now().microsecond / 1e6)
+            frac.append(self._tod_phase())
         if not frac:
             return 50
         to_next = min(1.0 - f for f in frac)
