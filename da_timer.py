@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -475,8 +475,8 @@ FEATURES = [
     ("next_hint", "Screen", "Show the next segment",
      "\"Next: ...\" beside the segment number"),
     ("tick_together", "Screen", "Clocks tick together",
-     "Segment and program clocks change on the same instant (the segment "
-     "clock is lined up to within a second, without any visible jump)"),
+     "Time of day, program and segment clocks all change on the same "
+     "instant (lined up to within a second, without any visible jump)"),
     ("fullscreen", "Screen", "Start in full screen GUI",
      "Open DA Timer full screen (the Full screen GUI button, F11 or Esc "
      "switch it)"),
@@ -3595,6 +3595,7 @@ class DATimerApp:
         root.bind_class("Toplevel", "<Map>", lambda e: self._fonts_on_map(e),
                         add="+")
         self._undo_stack = []          # most recent last
+        self._due = {}                 # timetable for the slower tick jobs
         self._seg_row_h = px(30)
         self._in_action = False
         feats = self.settings.setdefault("features", {})
@@ -4343,11 +4344,19 @@ class DATimerApp:
         return self.show.running or self.segment.running
 
     def _lock_phase(self):
-        """Keep the segment clock ticking over on the same instant as the
-        program clock. The program clock is the reference; the segment
-        clock is nudged by under a second, without changing what it shows."""
-        if not (self.show.running and self.segment.running
-                and self.feat("tick_together")):
+        """Keep every clock ticking over on the same instant: the program
+        clock follows the time of day, the segment clock follows the
+        program. Each is nudged by under a second, without changing what it
+        shows, so nothing jumps or goes backwards."""
+        if not self.feat("tick_together"):
+            return
+        if self.show.running:
+            tod = self.clock.now().microsecond / 1e6
+            p = self.show.elapsed()
+            d = tod - (p % 1.0)
+            if abs(d) > 0.002 and 0 <= (p % 1.0) + d < 1.0:
+                self.show.started_at -= d
+        if not (self.show.running and self.segment.running):
             return
         p, s_ = self.show.elapsed(), self.segment.elapsed()
         # Keep the second on screen, just move where in that second we are,
@@ -4396,17 +4405,39 @@ class DATimerApp:
                       fg={"ok": MUTED, "warn": AMBER, "error": RED}[state])
             self._cfg(self.tod_lbl, fg={"ok": TEXT, "warn": AMBER,
                                         "error": RED}[state])
-        self._api_tick += 1
-        if self._api_tick % 20 == 0:          # once a second
+        # Slower jobs on a timetable (the tick rate itself varies, below)
+        now = time.monotonic()
+        due = self._due
+        if now >= due.get("status", 0):
+            due["status"] = now + 1.0
             self.clock.refresh_status()
-        if self._api_tick % 40 == 0:          # every 2 s: crash-safe state
+        if now >= due.get("state", 0):        # crash-safe state every 2 s
+            due["state"] = now + 2.0
             self._save_show_state()
-        if self._api_tick % 4 == 0:           # back-time band ~5x a second
+        if now >= due.get("backtime", 0):     # back-time band ~5x a second
+            due["backtime"] = now + 0.2
             self._update_backtime()
-        if self._api_tick % 3 == 0:          # publish state ~6x a second
+        if now >= due.get("api", 0):          # publish state ~6x a second
+            due["api"] = now + 0.15
             self.api.state = self._api_snapshot()
             self._update_deck_status()
-        self.root.after(50, self._tick)
+        self.root.after(self._next_tick_ms(), self._tick)
+
+    def _next_tick_ms(self):
+        """Wake up just after the next second boundary of whatever is on
+        screen, so every clock changes exactly on its second instead of up
+        to 50 ms late. Never sleep longer than 50 ms (buttons, API)."""
+        frac = []
+        if self.show.running:
+            frac.append(self.show.elapsed() % 1.0)
+        if self.segment.running:
+            frac.append(self.segment.elapsed() % 1.0)
+        if self.tod_on or self.output is not None:
+            frac.append(self.clock.now().microsecond / 1e6)
+        if not frac:
+            return 50
+        to_next = min(1.0 - f for f in frac)
+        return max(1, min(50, int(to_next * 1000) + 3))
 
     def _update_visuals(self):
         seg, show = self.segment.running, self.show.running
@@ -5392,7 +5423,9 @@ class DATimerApp:
         self.bt_panel.set_border(col if bt["state"] in ("cut", "past")
                                  else BORDER)
         # keep the running order's START BY column fresh
-        if self.seg_panel_on and self._api_tick % 20 == 0:
+        now = time.monotonic()
+        if self.seg_panel_on and now >= self._due.get("startby", 0):
+            self._due["startby"] = now + 1.0
             for i in range(len(self.segment_times) + 1,
                            len(self._plan()) + 1):
                 if self.seg_list.exists(str(i)):
@@ -5843,6 +5876,14 @@ for _name, _label in (("start_all", "All start"), ("stop_all", "All stop"),
 
 def main():
     enable_dpi_awareness()
+    if sys.platform == "win32":
+        # Windows wakes timers every 15.6 ms by default, which makes the
+        # clocks change unevenly; ask for 1 ms while DA Timer is open
+        try:
+            import ctypes
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        except Exception:
+            pass
     root = tk.Tk()
     init_fonts(root)
     choice = load_settings().get("ui_scale", "auto")
