@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -589,6 +589,9 @@ def copy_show(show):
                            **(show.get("hard_out") or {}))
     if show.get("output_layout"):
         out["output_layout"] = [dict(r) for r in show["output_layout"]]
+    if show.get("overlay"):
+        import copy
+        out["overlay"] = copy.deepcopy(show["overlay"])
     return out
 
 
@@ -1367,6 +1370,74 @@ def output_layout(show):
     return rows
 
 
+# Video overlay: its own per-show settings (separate from the monitor output)
+OVERLAY_ITEMS = [
+    # id, name in the designer, part of
+    ("title", "Show title", "info"),
+    ("seg_line", "Segment line (\u201cSegment 3 of 8\u201d)", "info"),
+    ("seg_name", "Segment name", "info"),
+    ("seg", "Segment clock", "seg"),
+    ("status", "Time left / over", "seg"),
+    ("prog", "Program clock", "prog"),
+    ("tod", "Time of day / timecode", "tod"),
+    ("message", "Bottom message", "msg"),
+]
+OVERLAY_BLOCKS = {"info": "Name and segment", "seg": "Segment clock",
+                  "prog": "Program clock", "tod": "Time of day"}
+DEFAULT_OVERLAY = {
+    "position": "bottom",        # bottom | top
+    "align": "full",             # full | left | center | right
+    "scale": 1.0,                # whole bar
+    "bg": "#090c11", "opacity": 0.78,
+    "accent": "", "fg": "",      # "" = the show's output colours
+    "safe": True,                # keep inside the 5% title-safe area
+    "logo": "", "logo_size": 1.0,
+    "font_text": "", "font_clock": "",   # "" = built-in
+    "order": ["info", "seg", "prog", "tod"],
+    "items": {
+        "title": {"show": True, "size": 1.0, "colour": ""},
+        "seg_line": {"show": True, "size": 1.0, "colour": "",
+                     "segments_left": True},
+        "seg_name": {"show": True, "size": 1.0, "colour": ""},
+        "seg": {"show": True, "size": 1.0, "colour": "", "count": "up"},
+        "status": {"show": False, "size": 1.0, "colour": ""},
+        "prog": {"show": True, "size": 1.0, "colour": ""},
+        "tod": {"show": False, "size": 1.0, "colour": "", "mode": "tod"},
+        "message": {"show": True, "size": 1.0, "colour": ""},
+    },
+}
+
+
+def overlay_config(show):
+    """The show's overlay settings with any missing values filled in. Shows
+    from before the designer start from their monitor-output choices."""
+    import copy
+    cfg = copy.deepcopy(DEFAULT_OVERLAY)
+    saved = show.get("overlay")
+    if not saved:
+        out = {r["id"]: r for r in output_layout(show)}
+        it = cfg["items"]
+        it["status"]["show"] = bool(out.get("seg_status", {}).get("show"))
+        it["tod"]["show"] = bool(out.get("clock", {}).get("show"))
+        it["tod"]["mode"] = out.get("clock", {}).get("mode") or "tod"
+        it["seg"]["count"] = out.get("seg_time", {}).get("count") or "up"
+        it["seg_line"]["segments_left"] = bool(
+            out.get("seg_title", {}).get("segments_left", True))
+        return cfg
+    for k, v in saved.items():
+        if k == "items":
+            for iid, row in (v or {}).items():
+                if iid in cfg["items"]:
+                    cfg["items"][iid].update(row)
+        elif k == "order":
+            order = [b for b in v if b in OVERLAY_BLOCKS]
+            cfg["order"] = order + [b for b in OVERLAY_BLOCKS
+                                    if b not in order]
+        elif k in cfg:
+            cfg[k] = v
+    return cfg
+
+
 def output_row(show, eid):
     for r in output_layout(show):
         if r["id"] == eid:
@@ -1884,6 +1955,395 @@ class OutputLayoutEditor(tk.Toplevel):
         self.on_done(self.show)
 
 
+class OverlayDesigner(tk.Toplevel):
+    """Design the video overlay: what shows, order, sizes, colours, logo,
+    position and fonts. Every change shows on open overlays straight away."""
+    SIZES = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0, 2.5]
+    SCALES = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0]
+
+    def __init__(self, master, app):
+        super().__init__(master)
+        import copy
+        self.app = app
+        self.original = copy.deepcopy(app.current_show.get("overlay"))
+        self.cfg = overlay_config(app.current_show)
+        self.title(f"Design video overlay - {app.current_show['name']}")
+        self.configure(bg=SURFACE, padx=px(22), pady=px(18))
+        self.transient(master)
+        self.resizable(False, False)
+        own = {UI_FONT, UI_BOLD, UI_HEAVY, DIGIT_FONT}
+        self.families = sorted({f for f in tkfont.families(self)
+                                if not f.startswith("@") and f not in own},
+                               key=str.lower)
+        tk.Label(self, text="Design video overlay", bg=SURFACE, fg=TEXT,
+                 font=(UI_BOLD, 16)).grid(row=0, column=0, columnspan=2,
+                                          sticky="w")
+        tk.Label(self, text=f"{app.current_show['name']}  ·  changes show "
+                            f"on the overlay straight away",
+                 bg=SURFACE, fg=MUTED, font=(UI_FONT, 10)).grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        self.left = tk.Frame(self, bg=SURFACE)
+        self.left.grid(row=2, column=0, sticky="nw")
+        self.right = tk.Frame(self, bg=SURFACE)
+        self.right.grid(row=2, column=1, sticky="nw", padx=(px(28), 0))
+        bottom = tk.Frame(self, bg=SURFACE)
+        bottom.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(16, 0))
+        ModernButton.sized(bottom, "Open preview in browser", self.preview,
+                           SURFACE, "neutral", font_px=13,
+                           height=38).pack(side="left")
+        ModernButton.sized(bottom, "Reset all", self.reset, SURFACE,
+                           "ghost", font_px=13, height=38).pack(
+            side="left", padx=(8, 0))
+        ModernButton.sized(bottom, "Done", self.done, SURFACE, "primary",
+                           font_px=14, height=38, pad_x=22).pack(side="right")
+        ModernButton.sized(bottom, "Cancel", self.cancel, SURFACE, "neutral",
+                           font_px=13, height=38).pack(side="right",
+                                                       padx=(0, 8))
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.bind("<Escape>", lambda e: self.cancel())
+        self._build()
+        self.update_idletasks()
+        x = master.winfo_rootx() + (master.winfo_width() - self.winfo_width()) // 2
+        y = master.winfo_rooty() + (master.winfo_height() - self.winfo_height()) // 4
+        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        self.grab_set()
+
+    # ------------------------------------------------------------ helpers
+    def _hdr(self, parent, text, row, pad=0):
+        tk.Label(parent, text=text, bg=SURFACE, fg=CYAN,
+                 font=(UI_BOLD, 12)).grid(row=row, column=0, columnspan=8,
+                                          sticky="w", pady=(pad, 6))
+
+    def _stepper(self, parent, value_text, minus, plus):
+        f = tk.Frame(parent, bg=SURFACE)
+        ModernButton(f, "−", minus, SURFACE, font_px=14, size=(28, 26),
+                     tracking=0).pack(side="left")
+        tk.Label(f, text=value_text, bg=SURFACE, fg=TEXT, width=5,
+                 font=(UI_FONT, 10)).pack(side="left")
+        ModernButton(f, "+", plus, SURFACE, font_px=14, size=(28, 26),
+                     tracking=0).pack(side="left")
+        return f
+
+    def _swatch(self, parent, colour, default_text, command):
+        shown = colour or None
+        lbl = tk.Label(parent, text=" " if shown else default_text,
+                       bg=shown or SURFACE_2,
+                       fg=_contrast(shown) if shown else MUTED, width=8,
+                       cursor="hand2", font=(UI_FONT, 9),
+                       highlightthickness=1, highlightbackground=BORDER)
+        lbl.bind("<Button-1>", lambda e: command())
+        return lbl
+
+    def _choice(self, parent, options, current, command):
+        f = tk.Frame(parent, bg=SURFACE)
+        for val, text in options:
+            ModernButton.sized(f, text, lambda v=val: command(v), SURFACE,
+                               "on" if current == val else "ghost",
+                               font_px=11, height=26, pad_x=10).pack(
+                side="left", padx=(0, 4))
+        return f
+
+    @staticmethod
+    def _step(values, cur, d):
+        i = min(range(len(values)), key=lambda k: abs(values[k] - cur))
+        return values[min(max(i + d, 0), len(values) - 1)]
+
+    # ------------------------------------------------------------- build
+    def _build(self):
+        for f in (self.left, self.right):
+            for w in f.winfo_children():
+                w.destroy()
+        cfg, it = self.cfg, self.cfg["items"]
+        L = self.left
+        self._hdr(L, "What shows", 0)
+        for col, text in enumerate(("Show", "Item", "Text size", "Colour",
+                                    "")):
+            tk.Label(L, text=text, bg=SURFACE, fg=FAINT, anchor="w",
+                     font=(UI_BOLD, 9)).grid(row=1, column=col, sticky="w",
+                                             padx=(4, 0) if col == 2 else 0)
+        r = 2
+        for iid, name, _part in OVERLAY_ITEMS:
+            row = it[iid]
+            Switch(L, row.get("show"), lambda v, i=iid: self._set(
+                i, show=v)).grid(row=r, column=0, sticky="w", pady=px(3))
+            note = ""
+            show = self.app.current_show
+            if iid == "title" and not show.get("title"):
+                note = "  (no title set)"
+            if iid == "message" and not show.get("message"):
+                note = "  (no message set)"
+            tk.Label(L, text=name + note, bg=SURFACE,
+                     fg=MUTED if note else TEXT, anchor="w", width=30,
+                     font=(UI_FONT, 11)).grid(row=r, column=1, sticky="w")
+            self._stepper(L, f"{float(row.get('size') or 1) * 100:.0f}%",
+                          lambda i=iid: self._size(i, -1),
+                          lambda i=iid: self._size(i, 1)).grid(
+                row=r, column=2, sticky="w", padx=(4, 10))
+            sw = tk.Frame(L, bg=SURFACE)
+            sw.grid(row=r, column=3, sticky="w")
+            self._swatch(sw, row.get("colour"),
+                         "Auto" if iid == "status" else "Default",
+                         lambda i=iid: self._pick_item_colour(i)).pack(
+                side="left")
+            if row.get("colour"):
+                ModernButton(sw, "Reset", lambda i=iid: self._set(
+                    i, colour=""), SURFACE, "ghost", font_px=10,
+                    size=(48, 24)).pack(side="left", padx=(4, 0))
+            ex = tk.Frame(L, bg=SURFACE)
+            ex.grid(row=r, column=4, sticky="w", padx=(8, 0))
+            if iid == "seg_line":
+                self._choice(ex, (("left", "With segments left"),
+                                  ("plain", "Number only")),
+                             "left" if row.get("segments_left") else "plain",
+                             lambda v: self._set("seg_line",
+                                                 segments_left=v == "left")
+                             ).pack(side="left")
+            elif iid == "seg":
+                self._choice(ex, (("up", "Count up"), ("down", "Count down")),
+                             row.get("count") or "up",
+                             lambda v: self._set("seg", count=v)
+                             ).pack(side="left")
+            elif iid == "tod":
+                self._choice(ex, (("tod", "Time of day"), ("tc", "Timecode")),
+                             row.get("mode") or "tod",
+                             lambda v: self._set("tod", mode=v)
+                             ).pack(side="left")
+            r += 1
+
+        self._hdr(L, "Order on the bar (left to right)", r, pad=14)
+        r += 1
+        for i, b in enumerate(cfg["order"]):
+            tk.Label(L, text=f"{i + 1}.  {OVERLAY_BLOCKS[b]}", bg=SURFACE,
+                     fg=TEXT, anchor="w", font=(UI_FONT, 11)).grid(
+                row=r, column=1, sticky="w")
+            o = tk.Frame(L, bg=SURFACE)
+            o.grid(row=r, column=2, columnspan=2, sticky="w", padx=(4, 0))
+            ModernButton(o, "Left", lambda i=i: self._move(i, -1), SURFACE,
+                         "ghost", font_px=10, size=(44, 24),
+                         tracking=0).pack(side="left")
+            ModernButton(o, "Right", lambda i=i: self._move(i, 1), SURFACE,
+                         "ghost", font_px=10, size=(50, 24),
+                         tracking=0).pack(side="left")
+            r += 1
+        tk.Label(L, text="The logo is always first; the message sits above "
+                         "the bar.", bg=SURFACE, fg=FAINT,
+                 font=(UI_FONT, 9)).grid(row=r, column=1, columnspan=4,
+                                         sticky="w", pady=(2, 0))
+
+        # ------------------------------------------------ right column
+        R = self.right
+        self._hdr(R, "Position and size", 0)
+        rows = [
+            ("Position", self._choice(R, (("bottom", "Bottom"),
+                                          ("top", "Top")),
+                                      cfg["position"],
+                                      lambda v: self._cfg(position=v))),
+            ("Width", self._choice(R, (("full", "Full"), ("left", "Left"),
+                                       ("center", "Centre"),
+                                       ("right", "Right")),
+                                   cfg["align"],
+                                   lambda v: self._cfg(align=v))),
+            ("Overall size", self._stepper(
+                R, f"{cfg['scale'] * 100:.0f}%",
+                lambda: self._cfg(scale=self._step(self.SCALES,
+                                                   cfg["scale"], -1)),
+                lambda: self._cfg(scale=self._step(self.SCALES,
+                                                   cfg["scale"], 1)))),
+        ]
+        safe = tk.Frame(R, bg=SURFACE)
+        Switch(safe, cfg.get("safe", True),
+               lambda v: self._cfg(safe=v)).pack(side="left")
+        tk.Label(safe, text="Keep inside title safe (5%)", bg=SURFACE,
+                 fg=MUTED, font=(UI_FONT, 10)).pack(side="left", padx=(8, 0))
+        rows.append(("", safe))
+        r = 1
+        for label, w in rows:
+            tk.Label(R, text=label, bg=SURFACE, fg=TEXT, anchor="w",
+                     font=(UI_FONT, 11)).grid(row=r, column=0, sticky="w",
+                                              pady=px(3))
+            w.grid(row=r, column=1, sticky="w", padx=(10, 0))
+            r += 1
+
+        self._hdr(R, "Colours", r, pad=14)
+        r += 1
+        colour_rows = [
+            ("Background", "bg", "#090c11"),
+            ("Labels / stripe", "accent", ""),
+            ("Text and clocks", "fg", ""),
+        ]
+        for label, key, _d in colour_rows:
+            tk.Label(R, text=label, bg=SURFACE, fg=TEXT, anchor="w",
+                     font=(UI_FONT, 11)).grid(row=r, column=0, sticky="w",
+                                              pady=px(3))
+            f = tk.Frame(R, bg=SURFACE)
+            f.grid(row=r, column=1, sticky="w", padx=(10, 0))
+            self._swatch(f, cfg.get(key), "Show's",
+                         lambda k=key: self._pick_cfg_colour(k)).pack(
+                side="left")
+            if key != "bg" and cfg.get(key):
+                ModernButton(f, "Reset", lambda k=key: self._cfg(**{k: ""}),
+                             SURFACE, "ghost", font_px=10,
+                             size=(48, 24)).pack(side="left", padx=(4, 0))
+            r += 1
+        tk.Label(R, text="Background see-through", bg=SURFACE, fg=TEXT,
+                 anchor="w", font=(UI_FONT, 11)).grid(row=r, column=0,
+                                                      sticky="w", pady=px(3))
+        op = cfg.get("opacity", 0.78)
+        self._stepper(R, f"{(1 - op) * 100:.0f}%",
+                      lambda: self._cfg(opacity=round(min(1, op + 0.1), 2)),
+                      lambda: self._cfg(opacity=round(max(0, op - 0.1), 2))
+                      ).grid(row=r, column=1, sticky="w", padx=(10, 0))
+        r += 1
+
+        self._hdr(R, "Logo", r, pad=14)
+        r += 1
+        lf = tk.Frame(R, bg=SURFACE)
+        lf.grid(row=r, column=0, columnspan=2, sticky="w")
+        path = logo_path(cfg.get("logo"))
+        self._logo_img = None
+        if path and Image is not None:
+            try:
+                im = Image.open(path).convert("RGBA")
+                h = px(40)
+                w = max(1, min(px(160), round(im.width * h / im.height)))
+                self._logo_img = ImageTk.PhotoImage(
+                    im.resize((w, h), Image.LANCZOS))
+            except Exception:
+                self._logo_img = None
+        tk.Label(lf, image=self._logo_img or "", text="" if self._logo_img
+                 else "No logo", bg=BG, fg=FAINT, font=(UI_FONT, 10),
+                 width=0 if self._logo_img else 14, padx=6, pady=6
+                 ).pack(side="left")
+        ModernButton.sized(lf, "Import…", self._import_logo, SURFACE,
+                           "neutral", font_px=12, height=30).pack(
+            side="left", padx=(10, 0))
+        if path:
+            ModernButton.sized(lf, "Remove", lambda: self._cfg(logo=""),
+                               SURFACE, "ghost", font_px=12,
+                               height=30).pack(side="left", padx=(6, 0))
+        r += 1
+        if path:
+            tk.Label(R, text="Logo size", bg=SURFACE, fg=TEXT, anchor="w",
+                     font=(UI_FONT, 11)).grid(row=r, column=0, sticky="w",
+                                              pady=px(3))
+            ls = cfg.get("logo_size", 1.0)
+            self._stepper(R, f"{ls * 100:.0f}%",
+                          lambda: self._cfg(logo_size=self._step(
+                              self.SIZES, ls, -1)),
+                          lambda: self._cfg(logo_size=self._step(
+                              self.SIZES, ls, 1))).grid(
+                row=r, column=1, sticky="w", padx=(10, 0))
+            r += 1
+
+        self._hdr(R, "Fonts", r, pad=14)
+        r += 1
+        for label, key, builtin in (("Text", "font_text", "Built-in (DA Sans)"),
+                                    ("Clocks", "font_clock",
+                                     "Built-in (DA Clock)")):
+            tk.Label(R, text=label, bg=SURFACE, fg=TEXT, anchor="w",
+                     font=(UI_FONT, 11)).grid(row=r, column=0, sticky="w",
+                                              pady=px(3))
+            cb = ttk.Combobox(R, width=26, style="Dark.TCombobox",
+                              values=[builtin] + self.families,
+                              font=(UI_FONT, 10))
+            cb.set(cfg.get(key) or builtin)
+            cb.grid(row=r, column=1, sticky="w", padx=(10, 0))
+
+            def pick(_e=None, cb=cb, key=key, builtin=builtin):
+                name = cb.get().strip()
+                if not name or name == builtin:
+                    self._cfg(**{key: ""})
+                    return
+                for f in self.families:
+                    if f.lower() == name.lower():
+                        self._cfg(**{key: f})
+                        return
+            cb.bind("<<ComboboxSelected>>", pick)
+            cb.bind("<Return>", pick)
+            r += 1
+        tk.Label(R, text="A chosen font must be installed on the computer "
+                         "showing the overlay.", bg=SURFACE, fg=FAINT,
+                 font=(UI_FONT, 9), wraplength=px(320),
+                 justify="left").grid(row=r, column=0, columnspan=2,
+                                      sticky="w", pady=(2, 0))
+        remap_fonts(self)
+
+    # ----------------------------------------------------------- changes
+    def _apply(self, rebuild=True):
+        import copy
+        self.app.current_show["overlay"] = copy.deepcopy(self.cfg)
+        self.app.api.state = self.app._api_snapshot()   # overlay sees it now
+        if rebuild:
+            self._build()
+
+    def _set(self, iid, **kw):
+        self.cfg["items"][iid].update(kw)
+        self._apply()
+
+    def _cfg(self, **kw):
+        self.cfg.update(kw)
+        self._apply()
+
+    def _size(self, iid, d):
+        cur = float(self.cfg["items"][iid].get("size") or 1.0)
+        self._set(iid, size=self._step(self.SIZES, cur, d))
+
+    def _move(self, i, d):
+        order = self.cfg["order"]
+        j = i + d
+        if 0 <= j < len(order):
+            order[i], order[j] = order[j], order[i]
+            self._apply()
+
+    def _pick_item_colour(self, iid):
+        _rgb, hexcol = colorchooser.askcolor(
+            self.cfg["items"][iid].get("colour") or None, parent=self,
+            title="Choose colour")
+        if hexcol:
+            self._set(iid, colour=hexcol)
+
+    def _pick_cfg_colour(self, key):
+        _rgb, hexcol = colorchooser.askcolor(self.cfg.get(key) or None,
+                                             parent=self,
+                                             title="Choose colour")
+        if hexcol:
+            self._cfg(**{key: hexcol})
+
+    def _import_logo(self):
+        src = filedialog.askopenfilename(parent=self, title="Overlay logo",
+                                         filetypes=LOGO_TYPES)
+        if src:
+            try:
+                self._cfg(logo=import_logo(src))
+            except OSError as exc:
+                messagebox.showerror(APP_NAME, f"Couldn't import the logo:\n"
+                                               f"{exc}", parent=self)
+
+    def preview(self):
+        import webbrowser
+        webbrowser.open(f"http://127.0.0.1:{self.app.api.port or API_PORT}"
+                        f"/overlay")
+
+    def reset(self):
+        import copy
+        self.cfg = copy.deepcopy(DEFAULT_OVERLAY)
+        self._apply()
+
+    def cancel(self):
+        if self.original is None:
+            self.app.current_show.pop("overlay", None)
+        else:
+            self.app.current_show["overlay"] = self.original
+        self.app.api.state = self.app._api_snapshot()
+        self.destroy()
+
+    def done(self):
+        self._apply(rebuild=False)
+        if self.app.current_show.get("name"):
+            save_show(self.app.current_show)
+        self.destroy()
+
+
 class OverlayDialog(tk.Toplevel):
     """Where to find the video overlay and how to add it to OBS / vMix."""
 
@@ -1898,8 +2358,8 @@ class OverlayDialog(tk.Toplevel):
                  font=(UI_BOLD, 18)).grid(row=0, column=0, columnspan=3,
                                           sticky="w")
         tk.Label(self, text="A transparent timing bar along the bottom of a "
-                            "16:9 picture, to put over a video feed. It "
-                            "follows this show's output layout and colours.",
+                            "16:9 picture, to put over a video feed. Choose "
+                            "what it shows with Design overlay.",
                  bg=SURFACE, fg=MUTED, font=(UI_FONT, 11), justify="left",
                  wraplength=px(560)).grid(row=1, column=0, columnspan=3,
                                          sticky="w", pady=(2, 14))
@@ -1959,6 +2419,11 @@ class OverlayDialog(tk.Toplevel):
         ModernButton.sized(bottom, "Open in browser",
                            lambda: self._open(urls[0][1]), SURFACE, "neutral",
                            font_px=13, height=38).pack(side="left")
+        ModernButton.sized(bottom, "Design overlay\u2026",
+                           lambda: (self.destroy(),
+                                    app.open_overlay_designer()),
+                           SURFACE, "neutral", font_px=13,
+                           height=38).pack(side="left", padx=(8, 0))
         ModernButton.sized(bottom, "Done", self.destroy, SURFACE, "primary",
                            font_px=14, height=38, pad_x=22).pack(side="right")
         self.bind("<Escape>", lambda e: self.destroy())
@@ -3628,6 +4093,7 @@ class ControlAPI:
         self.port = port
         self.lan = lan
         self.live = None              # callable -> fresh clock values
+        self.logo = None              # callable -> overlay logo file path
         self.queue = queue.Queue()
         self.state = {"app": APP_NAME, "version": VERSION}
         self.server = None
@@ -3689,6 +4155,15 @@ class ControlAPI:
                     f = _app_file(OVERLAY_FILE)
                     return self._file(f, "text/html; charset=utf-8") if f \
                         else self._send(404, {"ok": False})
+                if path.startswith("/overlay/logo"):
+                    f = api.logo() if api.logo else None
+                    if not f:
+                        return self._send(404, {"ok": False})
+                    ext = os.path.splitext(f)[1].lower()
+                    return self._file(f, {".png": "image/png",
+                                          ".gif": "image/gif",
+                                          ".bmp": "image/bmp"}.get(
+                                              ext, "image/jpeg"))
                 if path.startswith("/fonts/") and \
                         path.rsplit("/", 1)[-1] in FONT_FILES:
                     f = os.path.join(FONT_DIR, path.rsplit("/", 1)[-1])
@@ -3800,6 +4275,8 @@ class DATimerApp:
                               if self.feat("api") else None,
                               lan=self.feat("overlay_lan"))
         self.api.live = self._live_clock
+        self.api.logo = lambda: logo_path(
+            overlay_config(self.current_show).get("logo"))
         self._api_tick = 0
         self.deck = None
         if self.feat("deck"):
@@ -4800,6 +5277,9 @@ class DATimerApp:
     def open_overlay_help(self):
         OverlayDialog(self.root, self)
 
+    def open_overlay_designer(self):
+        OverlayDesigner(self.root, self)
+
     def open_output_layout(self):
         def done(show):
             for k in ("output_layout", "bg", "fg", "accent"):
@@ -5154,6 +5634,8 @@ class DATimerApp:
                          command=self.open_output_layout)
         menu.add_command(label="Video overlay (OBS / vMix)\u2026",
                          command=self.open_overlay_help)
+        menu.add_command(label="Design video overlay\u2026",
+                         command=self.open_overlay_designer)
         menu.add_command(label="Refresh screens", command=self.pick_screen)
         self._popup(menu, self.screen_btn)
 
@@ -5259,31 +5741,33 @@ class DATimerApp:
 
     def _overlay_info(self):
         """What the video overlay needs besides the live clocks: the show's
-        output layout, colours and labels."""
+        overlay settings, colours and labels."""
         show = self.current_show
-        rows = output_layout(show)
-        accent = show.get("accent") or OUT_ACCENT
-        fg = show.get("fg") or OUT_FG
-
-        def colour(r):
-            role = OUTPUT_DEFAULTS[r["id"]][3]
-            return r.get("colour") or (accent if role == "accent" else
-                                       "" if role == "auto" else fg)
+        cfg = overlay_config(show)
         n = len(self.segment_times)
+        label = (show.get("segment_label") or "Segment").upper()
+        prog = self._seg_progress()
+        line = f"{label} {n}"
+        if prog and cfg["items"]["seg_line"].get("segments_left"):
+            line = self._out_seg_caption()
+        logo = logo_path(cfg.get("logo"))
+        fonts = {}
+        for key in ("font_text", "font_clock"):
+            fonts[key] = cfg.get(key) or ""
         return {
-            "items": [{"id": r["id"], "show": bool(r.get("show")),
-                       "colour": colour(r), "size": r.get("size") or 1.0,
-                       "count": r.get("count") or "up",
-                       "mode": r.get("mode") or "tod",
-                       "segments_left": bool(r.get("segments_left"))}
-                      for r in rows],
-            "accent": accent, "fg": fg,
+            "cfg": cfg,
+            "accent": cfg.get("accent") or show.get("accent") or OUT_ACCENT,
+            "fg": cfg.get("fg") or show.get("fg") or OUT_FG,
             "title": show.get("title") or "",
             "message": show.get("message") or "",
-            "seg_caption": self._out_seg_caption(),
+            "seg_caption": line,
             "seg_name": self._seg_name(n),
+            "seg_label": label,
             "goal": self._goal(n) or 0,
             "show_label": (show.get("show_label") or "Program").upper(),
+            "logo": (f"/overlay/logo?{int(os.path.getmtime(logo))}"
+                     if logo else ""),
+            "fonts": fonts,
             "colours": {"ok": GREEN, "warn": AMBER, "over": RED},
         }
 

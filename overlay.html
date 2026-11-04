@@ -8,16 +8,17 @@
                                                  Settings -> Video overlay
                                                  on other computers)
   Size the source 1920x1080 (any 16:9 size works). The background is
-  transparent; the timing bar sits along the bottom of the frame.
+  transparent. What shows, sizes, colours, logo and position are set in
+  DA Timer: Output to monitor > Design video overlay. Changes appear live.
 
-  Optional settings on the end of the address, e.g. /overlay?pos=top&bg=0.6
+  Optional settings on the end of the address override DA Timer's, e.g.
+  /overlay?pos=top&bg=0.6
       host=IP:47800   where DA Timer is (only needed for a saved copy)
-      pos=top         put the bar at the top instead of the bottom
-      bg=0.0-1.0      bar background opacity (default 0.78)
-      scale=0.8       make the whole bar smaller / bigger
-      items=...       choose what shows instead of the show's output layout:
-                      name, seg, status, prog, tod, msg   e.g. items=seg,prog
-      safe=0          ignore the 5% title-safe margin
+      pos=top|bottom  bar position
+      bg=0.0-1.0      background opacity
+      scale=0.8       whole bar smaller / bigger
+      items=...       title,line,name,seg,status,prog,tod,msg
+      safe=0|1        title-safe margin off / on
 -->
 <html lang="en">
 <head>
@@ -26,77 +27,85 @@
 <title>DA Timer overlay</title>
 <link rel="icon" href="data:,">
 <style>
-  :root { --u: 1px; --accent: #00e5f0; --fg: #ffffff; --bg-a: 0.78; }
+  :root { --u: 1px; --accent: #00e5f0; --fg: #ffffff;
+          --barbg: rgba(9, 12, 17, .78); --side: 96; --edge: 54;
+          --ft: "DA Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+          --fts: "DA Sans SemiBold", "DA Sans", "Segoe UI", Arial, sans-serif;
+          --ftb: "DA Sans Bold", "DA Sans", "Segoe UI", Arial, sans-serif;
+          --fc: "DA Clock", "DA Sans", "Segoe UI", Arial, sans-serif; }
   html, body { margin: 0; height: 100%; background: transparent;
                overflow: hidden; }
-  body { font-family: "DA Sans", "Segoe UI", "Helvetica Neue", Arial,
-         sans-serif; color: var(--fg);
+  body { font-family: var(--ft); color: var(--fg);
          -webkit-font-smoothing: antialiased; }
-  /* the 16:9 picture, letterboxed inside whatever size the source is */
   #frame { position: absolute; inset: 0; margin: auto;
            width: min(100vw, 177.7778vh); height: min(56.25vw, 100vh); }
   #wrap { position: absolute; left: calc(var(--side) * var(--u));
           right: calc(var(--side) * var(--u));
           bottom: calc(var(--edge) * var(--u));
           display: flex; flex-direction: column; align-items: stretch;
-          gap: calc(10 * var(--u));
-          transform-origin: 50% 100%; transform: scale(var(--scale, 1));
-          transition: opacity .4s ease; }
+          gap: calc(10 * var(--u)); transform-origin: 50% 100%;
+          transform: scale(var(--scale, 1)); transition: opacity .4s ease; }
   #wrap.top { bottom: auto; top: calc(var(--edge) * var(--u));
               flex-direction: column-reverse; transform-origin: 50% 0; }
+  #wrap.al-left { align-items: flex-start; transform-origin: 0 100%; }
+  #wrap.al-right { align-items: flex-end; transform-origin: 100% 100%; }
+  #wrap.al-center { align-items: center; }
+  #wrap.top.al-left { transform-origin: 0 0; }
+  #wrap.top.al-right { transform-origin: 100% 0; }
   #wrap.hidden { opacity: 0; }
 
-  #bar { display: flex; align-items: stretch; min-height: calc(132 * var(--u));
-         background: rgba(9, 12, 17, var(--bg-a));
+  #bar { display: flex; align-items: stretch; max-width: 100%;
+         min-height: calc(110 * var(--u)); background: var(--barbg);
          border-radius: calc(16 * var(--u)); overflow: hidden;
-         box-shadow: 0 calc(6 * var(--u)) calc(30 * var(--u)) rgba(0,0,0,.35);
          position: relative; }
-  #bar::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0;
-                 width: calc(8 * var(--u)); background: var(--accent);
-                 transition: background .3s; }
+  #bar.shadow { box-shadow: 0 calc(6 * var(--u)) calc(30 * var(--u))
+                            rgba(0, 0, 0, .35); }
+  #bar::before { content: ""; position: absolute; left: 0; top: 0;
+                 bottom: 0; width: calc(8 * var(--u));
+                 background: var(--accent); transition: background .3s; }
   #bar.running::before { background: #2bd47d; }
   #bar.over::before { background: #ff4757; }
-  #bar.compact { align-self: center; max-width: 100%; }
   .blk { display: flex; flex-direction: column; justify-content: flex-start;
          padding: calc(16 * var(--u)) calc(34 * var(--u)); min-width: 0; }
-  .blk + .blk { border-left: calc(2 * var(--u)) solid rgba(255,255,255,.12); }
-  .blk.hide { display: none; }
-  #b-name { flex: 1 1 auto; padding-left: calc(46 * var(--u));
-            justify-content: center; }
-  #b-name + .blk:not(.hide), #bar.compact .blk:first-child:not(.hide) { }
-  #bar.compact .blk:not(.hide) { padding-left: calc(40 * var(--u)); }
-  .cap { font-family: "DA Sans SemiBold", "DA Sans", "Segoe UI", Arial,
-         sans-serif; font-weight: 600; text-transform: uppercase;
+  .blk.first { padding-left: calc(46 * var(--u)); }
+  .blk.sep { border-left: calc(2 * var(--u)) solid rgba(255,255,255,.12); }
+  .hide { display: none !important; }
+  #b-info { justify-content: center; }
+  #wrap.al-full #b-info { flex: 1 1 auto; }
+  #b-logo { justify-content: center; align-items: center;
+            padding-right: calc(10 * var(--u)); }
+  #logo { display: block; height: calc(var(--logo, 84) * var(--u));
+          width: auto; max-width: calc(420 * var(--u)); object-fit: contain; }
+  .cap { font-family: var(--fts); font-weight: 600; text-transform: uppercase;
          letter-spacing: .06em; color: var(--accent);
-         font-size: calc(24 * var(--u)); line-height: 1.15;
+         font-size: calc(var(--fs, 24) * var(--u)); line-height: 1.15;
          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .name { font-family: "DA Sans Bold", "DA Sans", "Segoe UI", Arial,
-          sans-serif; font-weight: 700; font-size: calc(46 * var(--u));
-          line-height: 1.1; margin-top: calc(4 * var(--u));
-          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .title { font-size: calc(20 * var(--u)); opacity: .75;
+  .name { font-family: var(--ftb); font-weight: 700;
+          font-size: calc(var(--fs, 46) * var(--u)); line-height: 1.1;
+          margin-top: calc(4 * var(--u)); white-space: nowrap;
+          overflow: hidden; text-overflow: ellipsis; }
+  .title { font-size: calc(var(--fs, 20) * var(--u)); opacity: .8;
            letter-spacing: .04em; text-transform: uppercase;
            margin-bottom: calc(4 * var(--u)); white-space: nowrap;
            overflow: hidden; text-overflow: ellipsis; }
-  .dig { font-family: "DA Clock", "DA Sans", "Segoe UI", Arial, sans-serif;
-         font-variant-numeric: tabular-nums; white-space: nowrap;
-         font-size: calc(var(--fs, 84) * var(--u)); line-height: 1;
-         margin-top: calc(4 * var(--u)); transition: color .25s; }
-  .status { font-family: "DA Sans SemiBold", "DA Sans", Arial, sans-serif;
-            font-weight: 600; font-size: calc(24 * var(--u));
-            letter-spacing: .04em; margin-top: calc(6 * var(--u));
-            white-space: nowrap; transition: color .25s; }
+  .dig { font-family: var(--fc); font-variant-numeric: tabular-nums;
+         white-space: nowrap; font-size: calc(var(--fs, 84) * var(--u));
+         line-height: 1; margin-top: calc(4 * var(--u));
+         transition: color .25s; }
+  .status { font-family: var(--fts); font-weight: 600;
+            font-size: calc(var(--fs, 24) * var(--u)); letter-spacing: .04em;
+            margin-top: calc(6 * var(--u)); white-space: nowrap;
+            transition: color .25s; }
   .status:empty { display: none; }
-  #msg { align-self: center; max-width: 100%;
-         background: rgba(9, 12, 17, var(--bg-a));
+  #msg { max-width: 100%; background: var(--barbg);
          border-radius: calc(12 * var(--u));
          padding: calc(10 * var(--u)) calc(30 * var(--u));
-         font-family: "DA Sans SemiBold", "DA Sans", Arial, sans-serif;
-         font-weight: 600; font-size: calc(30 * var(--u));
-         letter-spacing: .04em; text-transform: uppercase;
+         font-family: var(--fts); font-weight: 600;
+         font-size: calc(var(--fs, 30) * var(--u)); letter-spacing: .04em;
+         text-transform: uppercase;
          border-bottom: calc(3 * var(--u)) solid var(--accent);
          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #msg.hide { display: none; }
+  #wrap.al-full #msg { align-self: center; }
   #debug { position: absolute; left: 8px; top: 8px; font: 14px monospace;
            color: #ff4757; background: rgba(0,0,0,.6); padding: 4px 8px;
            display: none; }
@@ -104,16 +113,17 @@
 </head>
 <body>
 <div id="frame">
-  <div id="wrap" class="hidden">
+  <div id="wrap" class="hidden al-full">
     <div id="msg" class="hide"></div>
-    <div id="bar">
-      <div class="blk" id="b-name">
+    <div id="bar" class="shadow">
+      <div class="blk" id="b-logo"><img id="logo" alt=""></div>
+      <div class="blk" id="b-info">
         <div class="title" id="title"></div>
-        <div class="cap" id="seg-cap">Segment</div>
-        <div class="name" id="seg-name"></div>
+        <div class="cap" id="line"></div>
+        <div class="name" id="name"></div>
       </div>
       <div class="blk" id="b-seg">
-        <div class="cap" id="seg-clock-cap">Segment</div>
+        <div class="cap" id="seg-cap">Segment</div>
         <div class="dig" id="seg"></div>
         <div class="status" id="status"></div>
       </div>
@@ -137,7 +147,10 @@
   var host = q.get("host") ||
       (location.protocol === "file:" ? "127.0.0.1:47800" : "");
   var base = host ? "http://" + host : "";
-  var forced = q.get("items") ? q.get("items").split(",") : null;
+  var URL_ITEMS = q.get("items") ? q.get("items").split(",") : null;
+  var ALIAS = { title: "title", line: "seg_line", name: "seg_name",
+                seg: "seg", status: "status", prog: "prog", tod: "tod",
+                msg: "message" };
   var debug = q.has("debug");
   var $ = function (id) { return document.getElementById(id); };
   var root = document.documentElement.style;
@@ -155,17 +168,10 @@
     } catch (e) {}
   });
 
-  if (q.get("pos") === "top") wrap.classList.add("top");
-  if (q.has("bg")) root.setProperty("--bg-a", q.get("bg"));
-  if (q.has("scale")) root.setProperty("--scale", q.get("scale"));
-  var safe = q.get("safe") !== "0";
-
   // 1920x1080 design units -> real pixels of the 16:9 frame
   function fit() {
     var w = $("frame").getBoundingClientRect().width || 1920;
     root.setProperty("--u", (w / 1920) + "px");
-    root.setProperty("--side", safe ? 96 : 24);
-    root.setProperty("--edge", safe ? 54 : 20);
   }
   window.addEventListener("resize", fit);
   fit();
@@ -198,6 +204,15 @@
                           pad(Math.floor(t % 3600 / 60)) + ":" + pad(t % 60);
     return pad(Math.floor(t / 60)) + ":" + pad(t % 60);
   }
+  function rgba(hex, a) {
+    var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
+    if (!m) return "rgba(9,12,17," + a + ")";
+    return "rgba(" + parseInt(m[1], 16) + "," + parseInt(m[2], 16) + "," +
+           parseInt(m[3], 16) + "," + a + ")";
+  }
+  function fam(name, fallback) {
+    return name ? '"' + name.replace(/"/g, "") + '", ' + fallback : fallback;
+  }
   var last = {};
   function set(id, prop, val) {
     var k = id + "." + prop;
@@ -206,8 +221,17 @@
     var el = $(id);
     if (prop === "text") el.textContent = val;
     else if (prop === "color") el.style.color = val;
-    else if (prop === "hide") el.classList.toggle("hide", val);
+    else if (prop === "hide") el.classList.toggle("hide", !!val);
     else if (prop === "fs") el.style.setProperty("--fs", val);
+    else if (prop === "src") { if (val) el.src = base + val; }
+  }
+  function css(name, val) {
+    if (last["css" + name] === val) return;
+    last["css" + name] = val;
+    root.setProperty(name, val);
+  }
+  function cls(el, name, on) {
+    if (el.classList.contains(name) !== !!on) el.classList.toggle(name, !!on);
   }
 
   // --------------------------------------------------------------- frame
@@ -220,39 +244,86 @@
           Math.round(now - okAt) + " ms since data" :
           "Waiting for DA Timer at " + (base || location.host);
     }
-    var stale = !S || now - okAt > 3000;
-    wrap.classList.toggle("hidden", stale);
-    if (!S) return;
-    var L = S.live, O = S.overlay || {}, dt = (now - got) / 1000;
+    cls(wrap, "hidden", !S || now - okAt > 3000);
+    if (!S || !S.overlay || !S.overlay.cfg) return;
+    var L = S.live, O = S.overlay, cfg = O.cfg, it = cfg.items || {};
+    var dt = (now - got) / 1000;
     var seg = L.seg + (L.seg_running ? dt : 0);
     var prog = L.prog + (L.prog_running ? dt : 0);
-    var items = {};
-    (O.items || []).forEach(function (r) { items[r.id] = r; });
-    function on(id, key) {
-      if (forced) return forced.indexOf(key) >= 0;
-      return !!(items[id] && items[id].show);
-    }
-    root.setProperty("--accent", O.accent || "#00e5f0");
-    root.setProperty("--fg", O.fg || "#ffffff");
     var C = O.colours || { ok: "#2bd47d", warn: "#ffb547", over: "#ff4757" };
+    function on(id) {
+      if (URL_ITEMS) return URL_ITEMS.some(function (k) {
+        return ALIAS[k] === id; });
+      return !!(it[id] && it[id].show);
+    }
+    function size(id, px) {
+      var s = (it[id] && it[id].size) || 1;
+      return String(Math.round(px * Math.min(Math.max(s, 0.4), 3) * 10) / 10);
+    }
+    function col(id, dflt) { return (it[id] && it[id].colour) || dflt; }
 
-    // name block: title, "SEGMENT 3 OF 8 - 5 LEFT", segment name
-    var showName = on("seg_title", "name");
-    set("b-name", "hide", !showName);
-    bar.classList.toggle("compact", !showName);
-    set("title", "text", on("title", "title") ? O.title || "" : "");
-    set("seg-cap", "text", O.seg_caption || "");
-    set("seg-name", "text", O.seg_name || "");
+    // ---- look
+    var pos = q.get("pos") || cfg.position || "bottom";
+    cls(wrap, "top", pos === "top");
+    var al = cfg.align || "full";
+    ["full", "left", "center", "right"].forEach(function (a) {
+      cls(wrap, "al-" + a, a === al); });
+    var safe = q.has("safe") ? q.get("safe") !== "0" : cfg.safe !== false;
+    css("--side", safe ? "96" : "24");
+    css("--edge", safe ? "54" : "20");
+    css("--scale", q.get("scale") || String(cfg.scale || 1));
+    var op = q.has("bg") ? parseFloat(q.get("bg")) :
+        (cfg.opacity == null ? 0.78 : cfg.opacity);
+    css("--barbg", rgba(cfg.bg || "#090c11", op));
+    cls(bar, "shadow", op > 0.05);
+    css("--accent", O.accent || "#00e5f0");
+    css("--fg", O.fg || "#ffffff");
+    var F = O.fonts || {};
+    css("--ft", fam(F.font_text, '"DA Sans", "Segoe UI", Arial, sans-serif'));
+    css("--fts", fam(F.font_text,
+        '"DA Sans SemiBold", "DA Sans", "Segoe UI", Arial, sans-serif'));
+    css("--ftb", fam(F.font_text,
+        '"DA Sans Bold", "DA Sans", "Segoe UI", Arial, sans-serif'));
+    css("--fc", fam(F.font_clock,
+        '"DA Clock", "DA Sans", "Segoe UI", Arial, sans-serif'));
 
-    // segment clock + time left / over
-    var goal = O.goal || 0, si = items.seg_time || {};
-    var showSeg = on("seg_time", "seg");
-    set("b-seg", "hide", !showSeg && !on("seg_status", "status"));
-    set("seg", "hide", !showSeg);
-    set("seg-clock-cap", "text", showName ? "Segment"
-        : (O.seg_caption || "Segment"));
-    var segTxt = hms(seg), segCol = si.colour || O.fg || "#fff";
-    var over = false;
+    // ---- block order (logo always first)
+    var order = (cfg.order || ["info", "seg", "prog", "tod"]).join(",");
+    if (last.order !== order) {
+      last.order = order;
+      order.split(",").forEach(function (b) {
+        var el = $("b-" + b); if (el) bar.appendChild(el); });
+    }
+
+    // ---- logo
+    set("b-logo", "hide", !O.logo);
+    set("logo", "src", O.logo || "");
+    $("logo").style.setProperty("--logo",
+        String(84 * Math.min(Math.max(cfg.logo_size || 1, 0.3), 3)));
+
+    // ---- name / segment line
+    var showInfo = on("title") || on("seg_line") || on("seg_name");
+    set("b-info", "hide", !showInfo);
+    set("title", "hide", !on("title") || !O.title);
+    set("title", "text", O.title || "");
+    set("title", "fs", size("title", 20));
+    set("title", "color", col("title", O.fg));
+    set("line", "hide", !on("seg_line"));
+    set("line", "text", O.seg_caption || "");
+    set("line", "fs", size("seg_line", 24));
+    set("line", "color", col("seg_line", "var(--accent)"));
+    set("name", "hide", !on("seg_name") || !O.seg_name);
+    set("name", "text", O.seg_name || "");
+    set("name", "fs", size("seg_name", 46));
+    set("name", "color", col("seg_name", O.fg));
+
+    // ---- segment clock + time left / over
+    var goal = O.goal || 0, si = it.seg || {};
+    set("b-seg", "hide", !on("seg") && !on("status"));
+    set("seg", "hide", !on("seg"));
+    set("seg-cap", "text", on("seg_line") && showInfo ? (O.seg_label ||
+        "Segment") : (O.seg_caption || "Segment"));
+    var segTxt = hms(seg), segCol = col("seg", O.fg), over = false;
     if (si.count === "down" && goal) {
       var left = goal - Math.floor(seg);
       if (left >= 0) { segTxt = hms(left); if (left <= 15) segCol = C.warn; }
@@ -260,48 +331,56 @@
     }
     set("seg", "text", segTxt);
     set("seg", "color", segCol);
-    set("seg", "fs", String(84 * Math.min(Math.max(si.size || 1, .6), 1.5)));
+    set("seg", "fs", size("seg", 84));
     var st = "", stCol = "";
-    if (on("seg_status", "status") && goal) {
+    if (on("status") && goal) {
       var d = Math.floor(seg) - goal;
       if (d > 0) { st = "+" + short(d) + " over"; stCol = C.over; over = true; }
       else if (d === 0) { st = "On goal"; stCol = C.warn; }
       else { st = short(-d) + " left"; stCol = -d <= 15 ? C.warn : C.ok; }
-      if (items.seg_status && items.seg_status.colour) {
-        stCol = items.seg_status.colour;
-      }
+      stCol = col("status", stCol);
     }
     set("status", "text", st);
     set("status", "color", stCol);
+    set("status", "fs", size("status", 24));
 
-    // program clock
-    var pi = items.show_time || {};
-    set("b-prog", "hide", !on("show_time", "prog"));
+    // ---- program clock
+    set("b-prog", "hide", !on("prog"));
     set("prog-cap", "text", O.show_label || "Program");
     set("prog", "text", hms(prog));
-    set("prog", "color", pi.colour || O.fg || "#fff");
-    set("prog", "fs", String(84 * Math.min(Math.max(pi.size || 1, .6), 1.5)));
+    set("prog", "color", col("prog", O.fg));
+    set("prog", "fs", size("prog", 84));
 
-    // time of day / timecode
-    var ti = items.clock || {};
-    set("b-tod", "hide", !on("clock", "tod"));
+    // ---- time of day / timecode
+    var ti = it.tod || {};
+    set("b-tod", "hide", !on("tod"));
     if (ti.mode === "tc" && L.tc) {
-      set("tod-cap", "text", "Timecode");
-      set("tod", "text", L.tc);
+      set("tod-cap", "text", "Timecode"); set("tod", "text", L.tc);
     } else {
       set("tod-cap", "text", "Time of day");
       set("tod", "text", hms((L.tod + dt) % 86400));
     }
-    set("tod", "color", ti.colour || O.fg || "#fff");
-    set("tod", "fs", String(84 * Math.min(Math.max(ti.size || 1, .6), 1.5)));
+    set("tod", "color", col("tod", O.fg));
+    set("tod", "fs", size("tod", 84));
 
-    // bottom message as a strip above the bar
-    var msg = on("message", "msg") ? O.message || "" : "";
+    // ---- separators and first-block padding follow what's visible
+    var vis = Array.prototype.filter.call(bar.children, function (el) {
+      return !el.classList.contains("hide"); });
+    vis.forEach(function (el, i) {
+      cls(el, "first", i === 0);
+      cls(el, "sep", i > 0 && vis[i - 1].id !== "b-logo");
+    });
+    set("bar", "hide", vis.length === 0);
+
+    // ---- bottom message strip
+    var msg = on("message") ? O.message || "" : "";
     set("msg", "text", msg);
     set("msg", "hide", !msg);
+    set("msg", "fs", size("message", 30));
+    set("msg", "color", col("message", O.fg));
 
-    bar.classList.toggle("running", !!L.seg_running && !over);
-    bar.classList.toggle("over", over);
+    cls(bar, "running", !!L.seg_running && !over);
+    cls(bar, "over", over);
   }
   requestAnimationFrame(frame);
 })();

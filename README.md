@@ -14,7 +14,7 @@ See **DA Timer Help.pdf** for how to use it.
 
 ## Video overlay
 
-DA Timer serves a transparent lower-third at `http://127.0.0.1:47800/overlay` for OBS, vMix or any HTML input (1920 × 1080). In the app: **Output to monitor ▾ → Video overlay**.
+DA Timer serves a transparent lower-third at `http://127.0.0.1:47800/overlay` for OBS, vMix or any HTML input (1920 × 1080). In the app: **Output to monitor ▾ → Video overlay** for the address, and **Design video overlay** to choose what shows, sizes, colours, logo, position and fonts.
 
 ![Overlay preview](overlay-preview.png)
 
