@@ -12,6 +12,12 @@ Segment and program timer for broadcast Director's Assistants. It runs with a du
 
 See **DA Timer Help.pdf** for how to use it.
 
+## Video overlay
+
+DA Timer serves a transparent lower-third at `http://127.0.0.1:47800/overlay` for OBS, vMix or any HTML input (1920 × 1080). In the app: **Output to monitor ▾ → Video overlay**.
+
+![Overlay preview](overlay-preview.png)
+
 ## Run it
 
 * **Windows:** double-click `Run DA Timer.bat`. It needs 64-bit Python 3.12.

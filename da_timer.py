@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "1.0.5"
+VERSION = "1.1.0"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -466,9 +466,12 @@ FEATURES = [
     ("undo", "Features", "Undo", f"Undo button, {MOD}Z and the undo pop-ups"),
     ("deck", "Devices", "Stream Deck (direct USB)",
      "DA Timer drives a plugged-in Stream Deck itself"),
+    ("overlay_lan", "Devices", "Video overlay on other computers",
+     "Lets a graphics / vision PC load the overlay over the network "
+     "(view only). Takes effect next time DA Timer starts"),
     ("api", "Devices", "Remote control",
-     "For the Elgato Stream Deck plugin and Bitfocus Companion. Takes effect "
-     "next time DA Timer starts"),
+     "For the Elgato Stream Deck plugin, Bitfocus Companion and the video "
+     "overlay. Takes effect next time DA Timer starts"),
     ("master_buttons", "Screen", "ALL START / ALL STOP keys",
      "The two big keys on the left"),
     ("logos", "Screen", "Logos in the header", "Show logo and company logo"),
@@ -496,7 +499,8 @@ FEATURES = [
     ("auto_log", "Safety", "Log button presses automatically",
      "Starts, stops, next segment and presets go in the log"),
 ]
-FEATURE_DEFAULTS = {k: k != "fullscreen" for k, *_ in FEATURES}
+FEATURE_DEFAULTS = {k: k not in ("fullscreen", "overlay_lan")
+                    for k, *_ in FEATURES}
 
 
 # --------------------------------------------------------------------------
@@ -1878,6 +1882,99 @@ class OutputLayoutEditor(tk.Toplevel):
         self._changed(initial=True)
         self._close()
         self.on_done(self.show)
+
+
+class OverlayDialog(tk.Toplevel):
+    """Where to find the video overlay and how to add it to OBS / vMix."""
+
+    def __init__(self, master, app):
+        super().__init__(master)
+        self.title("Video overlay")
+        self.configure(bg=SURFACE, padx=px(26), pady=px(20))
+        self.transient(master)
+        self.resizable(False, False)
+        port = app.api.port or API_PORT
+        tk.Label(self, text="Video overlay", bg=SURFACE, fg=TEXT,
+                 font=(UI_BOLD, 18)).grid(row=0, column=0, columnspan=3,
+                                          sticky="w")
+        tk.Label(self, text="A transparent timing bar along the bottom of a "
+                            "16:9 picture, to put over a video feed. It "
+                            "follows this show's output layout and colours.",
+                 bg=SURFACE, fg=MUTED, font=(UI_FONT, 11), justify="left",
+                 wraplength=px(560)).grid(row=1, column=0, columnspan=3,
+                                         sticky="w", pady=(2, 14))
+        r = 2
+        if app.api.server is None:
+            tk.Label(self, text="Remote control is switched off in Settings "
+                                "(or another program is using port "
+                                f"{port}), so the overlay isn't available. "
+                                "Turn it on and restart DA Timer.",
+                     bg=SURFACE, fg=AMBER, font=(UI_FONT, 11), justify="left",
+                     wraplength=px(560)).grid(row=r, column=0, columnspan=3,
+                                             sticky="w")
+            r += 1
+        urls = [("On this computer", f"http://127.0.0.1:{port}/overlay")]
+        ip = lan_address()
+        if app.api.lan and ip:
+            urls.append(("From another computer", f"http://{ip}:{port}/overlay"))
+        for label, url in urls:
+            tk.Label(self, text=label, bg=SURFACE, fg=TEXT,
+                     font=(UI_BOLD, 11)).grid(row=r, column=0, sticky="w",
+                                              padx=(0, 12), pady=4)
+            e = tk.Entry(self, width=36, bg=BG, fg=CYAN, relief="flat",
+                         readonlybackground=BG, highlightthickness=1,
+                         highlightbackground=BORDER, font=(UI_FONT, 12))
+            e.insert(0, url)
+            e.config(state="readonly")
+            e.grid(row=r, column=1, sticky="w", ipady=4)
+            ModernButton.sized(self, "Copy", lambda u=url: self._copy(u),
+                               SURFACE, "neutral", font_px=12,
+                               height=32).grid(row=r, column=2, padx=(8, 0))
+            r += 1
+        if not app.api.lan:
+            tk.Label(self, text="For a graphics / vision PC on the network, "
+                                "turn on Settings \u2192 Video overlay on "
+                                "other computers, then restart DA Timer.",
+                     bg=SURFACE, fg=FAINT, font=(UI_FONT, 10), justify="left",
+                     wraplength=px(560)).grid(row=r, column=0, columnspan=3,
+                                             sticky="w", pady=(4, 0))
+            r += 1
+        steps = ("How to add it\n"
+                 "OBS: Sources \u2192 + \u2192 Browser, paste the address, "
+                 "width 1920, height 1080.\n"
+                 "vMix: Add Input \u2192 Web Browser, paste the address, "
+                 "1920 \u00d7 1080.\n"
+                 "Other tools: any HTML / web page input, 16:9.\n\n"
+                 "Options on the end of the address, e.g. /overlay?pos=top\n"
+                 "pos=top \u2013 bar at the top     bg=0.5 \u2013 see-through "
+                 "background\nscale=0.8 \u2013 smaller     "
+                 "items=seg,prog,tod \u2013 pick what shows")
+        tk.Label(self, text=steps, bg=SURFACE, fg=MUTED, font=(UI_FONT, 10),
+                 justify="left", anchor="w").grid(row=r, column=0,
+                                                  columnspan=3, sticky="w",
+                                                  pady=(14, 0))
+        r += 1
+        bottom = tk.Frame(self, bg=SURFACE)
+        bottom.grid(row=r, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+        ModernButton.sized(bottom, "Open in browser",
+                           lambda: self._open(urls[0][1]), SURFACE, "neutral",
+                           font_px=13, height=38).pack(side="left")
+        ModernButton.sized(bottom, "Done", self.destroy, SURFACE, "primary",
+                           font_px=14, height=38, pad_x=22).pack(side="right")
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.update_idletasks()
+        x = master.winfo_rootx() + (master.winfo_width() - self.winfo_width()) // 2
+        y = master.winfo_rooty() + (master.winfo_height() - self.winfo_height()) // 3
+        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+    def _copy(self, url):
+        self.clipboard_clear()
+        self.clipboard_append(url)
+
+    @staticmethod
+    def _open(url):
+        import webbrowser
+        webbrowser.open(url)
 
 
 # --------------------------------------------------------------------------
@@ -3499,9 +3596,38 @@ API_COMMANDS = {
 }
 
 
+OVERLAY_FILE = "overlay.html"
+FONT_FILES = {"DAClock.ttf", "DASans.ttf", "DASans-SemiBold.ttf",
+              "DASans-Bold.ttf"}
+
+
+def _app_file(name):
+    here = os.path.dirname(os.path.abspath(__file__))
+    for d in (getattr(sys, "_MEIPASS", here), here):
+        path = os.path.join(d, name)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def lan_address():
+    """This computer's address on the local network (for the overlay URL)."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))      # nothing is actually sent
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return None
+
+
 class ControlAPI:
-    def __init__(self, port):
+    def __init__(self, port, lan=False):
         self.port = port
+        self.lan = lan
+        self.live = None              # callable -> fresh clock values
         self.queue = queue.Queue()
         self.state = {"app": APP_NAME, "version": VERSION}
         self.server = None
@@ -3510,8 +3636,8 @@ class ControlAPI:
         if port is None:              # remote control switched off
             return
         try:
-            self.server = ThreadingHTTPServer(("127.0.0.1", port),
-                                              self._handler())
+            self.server = ThreadingHTTPServer(
+                ("0.0.0.0" if lan else "127.0.0.1", port), self._handler())
             self.server.daemon_threads = True
             threading.Thread(target=self.server.serve_forever,
                              daemon=True).start()
@@ -3529,15 +3655,48 @@ class ControlAPI:
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _file(self, path, ctype):
+                try:
+                    with open(path, "rb") as f:
+                        body = f.read()
+                except OSError:
+                    return self._send(404, {"ok": False, "error": "missing"})
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
                 self.wfile.write(body)
 
             def _route(self):
                 path = urlparse(self.path).path.rstrip("/")
+                local = self.client_address[0] in ("127.0.0.1", "::1")
                 if path in ("", "/api", "/api/state"):
                     api.last_seen = time.monotonic()
-                    return self._send(200, api.state)
+                    state = dict(api.state)
+                    if api.live is not None:
+                        try:
+                            state["live"] = api.live()
+                        except Exception:
+                            pass
+                    return self._send(200, state)
+                if path in ("/overlay", "/overlay.html"):
+                    f = _app_file(OVERLAY_FILE)
+                    return self._file(f, "text/html; charset=utf-8") if f \
+                        else self._send(404, {"ok": False})
+                if path.startswith("/fonts/") and \
+                        path.rsplit("/", 1)[-1] in FONT_FILES:
+                    f = os.path.join(FONT_DIR, path.rsplit("/", 1)[-1])
+                    return self._file(f, "font/ttf")
                 if path.startswith("/api/action/"):
+                    if not local:            # other computers: view only
+                        return self._send(403, {"ok": False, "error":
+                                                "actions only from this PC"})
                     if not self.headers.get("X-DA-Timer"):
                         return self._send(403, {"ok": False, "error":
                                                 "missing X-DA-Timer header"})
@@ -3638,7 +3797,9 @@ class DATimerApp:
         root.after(300, self._startup_output)
         root.after(700, self._offer_restore)
         self.api = ControlAPI(int(self.settings.get("api_port", API_PORT))
-                              if self.feat("api") else None)
+                              if self.feat("api") else None,
+                              lan=self.feat("overlay_lan"))
+        self.api.live = self._live_clock
         self._api_tick = 0
         self.deck = None
         if self.feat("deck"):
@@ -4636,6 +4797,9 @@ class DATimerApp:
                 show.get("name") == self.current_show.get("name"):
             self.output.apply_show(show)
 
+    def open_overlay_help(self):
+        OverlayDialog(self.root, self)
+
     def open_output_layout(self):
         def done(show):
             for k in ("output_layout", "bg", "fg", "accent"):
@@ -4988,6 +5152,8 @@ class DATimerApp:
         menu.add_separator()
         menu.add_command(label="Layout, sizes and colours\u2026",
                          command=self.open_output_layout)
+        menu.add_command(label="Video overlay (OBS / vMix)\u2026",
+                         command=self.open_overlay_help)
         menu.add_command(label="Refresh screens", command=self.pick_screen)
         self._popup(menu, self.screen_btn)
 
@@ -5088,7 +5254,52 @@ class DATimerApp:
             else None,
             "toggles": {"dual": self.output is not None, "tod": self.tod_on,
                         "log": self.log_on, "segments": self.seg_panel_on},
+            "overlay": self._overlay_info(),
         }
+
+    def _overlay_info(self):
+        """What the video overlay needs besides the live clocks: the show's
+        output layout, colours and labels."""
+        show = self.current_show
+        rows = output_layout(show)
+        accent = show.get("accent") or OUT_ACCENT
+        fg = show.get("fg") or OUT_FG
+
+        def colour(r):
+            role = OUTPUT_DEFAULTS[r["id"]][3]
+            return r.get("colour") or (accent if role == "accent" else
+                                       "" if role == "auto" else fg)
+        n = len(self.segment_times)
+        return {
+            "items": [{"id": r["id"], "show": bool(r.get("show")),
+                       "colour": colour(r), "size": r.get("size") or 1.0,
+                       "count": r.get("count") or "up",
+                       "mode": r.get("mode") or "tod",
+                       "segments_left": bool(r.get("segments_left"))}
+                      for r in rows],
+            "accent": accent, "fg": fg,
+            "title": show.get("title") or "",
+            "message": show.get("message") or "",
+            "seg_caption": self._out_seg_caption(),
+            "seg_name": self._seg_name(n),
+            "goal": self._goal(n) or 0,
+            "show_label": (show.get("show_label") or "Program").upper(),
+            "colours": {"ok": GREEN, "warn": AMBER, "over": RED},
+        }
+
+    def _live_clock(self):
+        """Fresh clock values for the overlay, read the moment it asks
+        (called from the web server's thread - reads only)."""
+        now = self.clock.now()
+        clk = self.clock
+        tc = clk.ltc_tc if (clk.mode == "ltc" and clk.ltc_tc and
+                            clk.state == "ok") else None
+        return {"seg": self.segment.elapsed(), "prog": self.show.elapsed(),
+                "seg_running": self.segment.running,
+                "prog_running": self.show.running,
+                "tod": now.hour * 3600 + now.minute * 60 + now.second
+                + now.microsecond / 1e6,
+                "tc": tc}
 
     # -------------------------------------------------------------- fonts --
     def _fonts_custom(self):

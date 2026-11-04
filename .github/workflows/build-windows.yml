@@ -38,6 +38,7 @@ jobs:
           python -m PyInstaller --noconfirm --onefile --windowed --name DA_Timer \
             --icon stopwatch.ico --version-file version_info.txt \
             --add-data "stopwatch.ico;." --add-data "author_logo.png;." \
+            --add-data "overlay.html;." \
             --add-data "fonts;fonts" --add-binary "hidapi.dll;." \
             --paths vendor --collect-submodules StreamDeck \
             --hidden-import da_deck --hidden-import da_sync \
@@ -53,6 +54,11 @@ jobs:
           Start-Sleep -Seconds 20
           if ($p.HasExited) { Write-Error "DA_Timer.exe quit or crashed on start (exit $($p.ExitCode))"; exit 1 }
           Write-Host "DA_Timer.exe is running - good"
+          $o = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:47800/overlay"
+          if ($o.Content -notmatch "DA Timer overlay") { Write-Error "overlay page missing"; exit 1 }
+          $st = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:47800/api/state"
+          if ($st.Content -notmatch '"live"') { Write-Error "live clock data missing"; exit 1 }
+          Write-Host "Overlay page and live data served - good"
           Stop-Process -Id $p.Id -Force
 
       - name: Package

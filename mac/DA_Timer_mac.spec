@@ -6,12 +6,13 @@ import sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
-VERSION = "1.0.5"
+VERSION = "1.1.0"
 sys.path.insert(0, os.path.join(ROOT, "vendor"))   # vendored StreamDeck lib
 
 datas = [(os.path.join(ROOT, "fonts"), "fonts"),
          (os.path.join(ROOT, "stopwatch.ico"), "."),
-         (os.path.join(ROOT, "author_logo.png"), ".")]
+         (os.path.join(ROOT, "author_logo.png"), "."),
+         (os.path.join(ROOT, "overlay.html"), ".")]
 binaries = []
 hidapi = os.path.join(ROOT, "libhidapi.dylib")      # copied in by the build
 if os.path.exists(hidapi):

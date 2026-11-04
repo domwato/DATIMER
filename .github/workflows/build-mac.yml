@@ -56,7 +56,10 @@ jobs:
           sleep 15
           cat "$RUNNER_TEMP/app.log"
           if kill -0 $PID 2>/dev/null; then
-            echo "DA Timer is running - good"; kill $PID
+            echo "DA Timer is running - good"
+            curl -sf http://127.0.0.1:47800/overlay | grep -q "DA Timer overlay" || { echo "overlay page missing"; kill $PID; exit 1; }
+            curl -sf http://127.0.0.1:47800/api/state | grep -q '"live"' || { echo "live data missing"; kill $PID; exit 1; }
+            echo "Overlay page and live data served - good"; kill $PID
           else
             echo "DA Timer quit or crashed on start"; exit 1
           fi

@@ -10,6 +10,7 @@ if not defined PY set "PY=python"
   --version-file version_info.txt ^
   --add-data "stopwatch.ico;." ^
   --add-data "author_logo.png;." ^
+  --add-data "overlay.html;." ^
   --add-data "fonts;fonts" ^
   --add-binary "hidapi.dll;." ^
   --paths vendor --collect-submodules StreamDeck ^
