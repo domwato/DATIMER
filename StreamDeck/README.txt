@@ -39,3 +39,12 @@ Other controllers (Bitfocus Companion, generic HTTP)
   Commands: all_start all_stop all_toggle seg_start seg_stop seg_toggle
             prog_start prog_stop prog_toggle next_segment mark reset_program
             dual_toggle tod_toggle log_toggle segments_toggle undo
+            message_clear
+  Talent message:
+  POST http://127.0.0.1:47800/api/message           header  X-DA-Timer: 1
+       body (JSON): {"text": "WRAP UP", "colour": "red", "flash": true,
+                     "seconds": 30}
+       colour: amber red green cyan white   seconds: auto-clear (0 = never)
+
+Direct USB mode (no Elgato app) also has a "Talent Message" key: presets
+1-6 (tap to send, tap again to clear) or Clear.

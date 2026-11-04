@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -464,6 +464,8 @@ FEATURES = [
     ("sync", "Features", "Time source sync",
      "NTP or LTC timecode. Off: uses the PC clock"),
     ("undo", "Features", "Undo", f"Undo button, {MOD}Z and the undo pop-ups"),
+    ("messages", "Features", "Talent messages",
+     "Send cues like WRAP UP to the output screen and the video overlay"),
     ("deck", "Devices", "Stream Deck (direct USB)",
      "DA Timer drives a plugged-in Stream Deck itself"),
     ("overlay_lan", "Devices", "Video overlay on other computers",
@@ -1370,6 +1372,15 @@ def output_layout(show):
     return rows
 
 
+# Talent messages (cues like WRAP UP shown on the output and overlay)
+CUE_COLOURS = [("amber", "Amber", "#ffb547"), ("red", "Red", "#ff4757"),
+               ("green", "Green", "#2bd47d"), ("cyan", "Cyan", "#00e5f0"),
+               ("white", "White", "#ffffff")]
+CUE_HEX = {k: h for k, _n, h in CUE_COLOURS}
+DEFAULT_CUES = ["WRAP UP", "30 SECONDS", "STRETCH", "STAND BY",
+                "GO TO BREAK", "SPEED UP"]
+
+
 # Video overlay: its own per-show settings (separate from the monitor output)
 OVERLAY_ITEMS = [
     # id, name in the designer, part of
@@ -1467,6 +1478,13 @@ class OutputView(tk.Frame):
                                   family=UI_BOLD)
         self.clock_time = FitLabel(self, "00:00:00", fill=0.88)
         self.rule = tk.Frame(self, height=2)
+        self.cue_bg = tk.Frame(self, bg="#ffb547")
+        self.cue_lbl = FitLabel(self.cue_bg, "WRAP UP", fill=0.8,
+                                family=UI_BOLD, bg="#ffb547", fg="#000000")
+        self.cue_lbl.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.cue = None
+        self._cue_job = None
+        self._cue_lit = True
         self.clock_mode = "off"
         self.status_colour = ""
         self.apply_show(show)
@@ -1571,6 +1589,44 @@ class OutputView(tk.Frame):
                           "show_time": self.show_time}[name]
                 widget.place(relx=0, rely=y, relwidth=1, relheight=h)
             y += h
+        if getattr(self, "_cue_key", None):       # a message is showing
+            self._paint_cue()
+            self.cue_bg.place(relx=0, rely=0, relwidth=1, relheight=0.3)
+            self.cue_bg.lift()
+
+    def set_cue(self, cue):
+        """Show a talent message as a band across the top (None hides it)."""
+        key = None if not cue else (cue["text"], cue["colour"], cue["flash"])
+        if key == getattr(self, "_cue_key", None):
+            return
+        self._cue_key = key
+        if self._cue_job:
+            self.after_cancel(self._cue_job)
+            self._cue_job = None
+        if not cue:
+            self.cue_bg.place_forget()
+            return
+        self.cue = cue
+        self._cue_lit = True
+        self.cue_lbl.set_text(cue["text"],
+                              max(cue["text"], "WRAP UP NOW", key=len))
+        self._paint_cue()
+        self.cue_bg.place(relx=0, rely=0, relwidth=1, relheight=0.3)
+        self.cue_bg.lift()
+        if cue.get("flash"):
+            self._flash()
+
+    def _paint_cue(self):
+        col = CUE_HEX.get(self.cue["colour"], "#ffb547")
+        bg, fg = (col, _contrast(col)) if self._cue_lit else \
+            ("#000000", col)
+        self.cue_bg.config(bg=bg)
+        self.cue_lbl.config(bg=bg, fg=fg)
+
+    def _flash(self):
+        self._cue_lit = not self._cue_lit
+        self._paint_cue()
+        self._cue_job = self.after(500, self._flash)
 
     def update_extras(self, seg_caption, clock_cap, clock_text):
         if self.seg_title.cget("text") != seg_caption:
@@ -1953,6 +2009,167 @@ class OutputLayoutEditor(tk.Toplevel):
         self._changed(initial=True)
         self._close()
         self.on_done(self.show)
+
+
+class MessageDialog(tk.Toplevel):
+    """Talent messages: tap a preset or type one, it shows straight away on
+    the output screen (and the video overlay if ticked). Stays open."""
+
+    def __init__(self, master, app):
+        super().__init__(master)
+        self.app = app
+        self.p = app._cue_prefs()
+        self.title("Talent message")
+        self.configure(bg=SURFACE, padx=px(22), pady=px(18))
+        self.transient(master)
+        self.resizable(False, False)
+        tk.Label(self, text="Talent message", bg=SURFACE, fg=TEXT,
+                 font=(UI_BOLD, 16)).grid(row=0, column=0, columnspan=2,
+                                          sticky="w")
+        tk.Label(self, text="Tap a preset or type a message. Right-click a "
+                            "preset to change it.", bg=SURFACE, fg=MUTED,
+                 font=(UI_FONT, 10)).grid(row=1, column=0, columnspan=2,
+                                          sticky="w", pady=(0, 10))
+        # what's live now
+        self.live = tk.Label(self, bg=BG, fg=FAINT, font=(UI_BOLD, 18),
+                             anchor="w", padx=px(14), pady=px(10),
+                             width=26)
+        self.live.grid(row=2, column=0, sticky="ew")
+        self.clear_btn = ModernButton.sized(self, "Clear", self.app.clear_cue,
+                                            SURFACE, "stop_dim", font_px=15,
+                                            height=48, pad_x=24)
+        self.clear_btn.grid(row=2, column=1, padx=(10, 0), sticky="e")
+        # presets
+        self.grid_f = tk.Frame(self, bg=SURFACE)
+        self.grid_f.grid(row=3, column=0, columnspan=2, sticky="w",
+                         pady=(14, 0))
+        self._build_presets()
+        # custom
+        ent = tk.Frame(self, bg=SURFACE)
+        ent.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        ent.grid_columnconfigure(0, weight=1)
+        self.var = tk.StringVar()
+        self.entry = tk.Entry(ent, textvariable=self.var, bg=BG, fg=TEXT,
+                              insertbackground=CYAN, relief="flat",
+                              highlightthickness=1, highlightbackground=BORDER,
+                              highlightcolor=CYAN, font=(UI_FONT, 14))
+        self.entry.grid(row=0, column=0, sticky="ew", ipady=8)
+        self.entry.bind("<Return>", lambda e: self._send_typed())
+        ModernButton.sized(ent, "Send", self._send_typed, SURFACE, "primary",
+                           font_px=14, height=40, pad_x=20).grid(
+            row=0, column=1, padx=(8, 0))
+        # options
+        opt = tk.Frame(self, bg=SURFACE)
+        opt.grid(row=5, column=0, columnspan=2, sticky="w", pady=(14, 0))
+        self.opt = opt
+        self._build_options()
+        self.bind("<Escape>", lambda e: self.app.clear_cue())
+        self.protocol("WM_DELETE_WINDOW", self.withdraw)
+        self.refresh_live()
+        self.update_idletasks()
+        x = master.winfo_rootx() + master.winfo_width() - self.winfo_width() - 40
+        y = master.winfo_rooty() + 90
+        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        self.entry.focus_set()
+
+    def _build_presets(self):
+        for w in self.grid_f.winfo_children():
+            w.destroy()
+        for i, text in enumerate(self.p["presets"]):
+            b = ModernButton(self.grid_f, text, lambda t=text:
+                             self.app.send_cue(t), SURFACE, "neutral",
+                             font_px=14, size=(170, 46), tracking=0.02)
+            b.grid(row=i // 3, column=i % 3, padx=(0, 8), pady=(0, 8))
+            b.bind("<Button-3>", lambda e, i=i: self._edit_preset(i))
+            b.bind("<Button-2>", lambda e, i=i: self._edit_preset(i))
+
+    def _option_row(self, r, label, widget):
+        tk.Label(self.opt, text=label, bg=SURFACE, fg=TEXT, anchor="w",
+                 font=(UI_FONT, 11)).grid(row=r, column=0, sticky="w",
+                                          pady=px(3))
+        widget.grid(row=r, column=1, sticky="w", padx=(12, 0))
+
+    def _build_options(self):
+        for w in self.opt.winfo_children():
+            w.destroy()
+        p = self.p
+        cf = tk.Frame(self.opt, bg=SURFACE)
+        for key, name, hexc in CUE_COLOURS:
+            on = p["colour"] == key
+            b = tk.Label(cf, text=name, bg=hexc, fg=_contrast(hexc),
+                         font=(UI_BOLD if on else UI_FONT, 10), padx=px(8),
+                         pady=px(4), cursor="hand2",
+                         highlightthickness=2,
+                         highlightbackground=TEXT if on else SURFACE)
+            b.bind("<Button-1>", lambda e, k=key: self._pref(colour=k))
+            b.pack(side="left", padx=(0, 6))
+        self._option_row(0, "Colour", cf)
+        sf = tk.Frame(self.opt, bg=SURFACE)
+        for key, label in (("output", "Output to monitor"),
+                           ("overlay", "Video overlay")):
+            Switch(sf, p[key], lambda v, k=key: self._pref(**{k: v})).pack(
+                side="left")
+            tk.Label(sf, text=label, bg=SURFACE, fg=MUTED,
+                     font=(UI_FONT, 10)).pack(side="left", padx=(6, 16))
+        self._option_row(1, "Show on", sf)
+        ff = tk.Frame(self.opt, bg=SURFACE)
+        Switch(ff, p["flash"], lambda v: self._pref(flash=v)).pack(
+            side="left")
+        tk.Label(ff, text="Flash to get attention", bg=SURFACE, fg=MUTED,
+                 font=(UI_FONT, 10)).pack(side="left", padx=(6, 0))
+        self._option_row(2, "", ff)
+        tf = tk.Frame(self.opt, bg=SURFACE)
+        for secs, label in ((0, "Until cleared"), (10, "10 s"), (30, "30 s"),
+                            (60, "1 min")):
+            ModernButton.sized(tf, label, lambda s_=secs: self._pref(
+                seconds=s_), SURFACE, "on" if p["seconds"] == secs else
+                "ghost", font_px=11, height=26, pad_x=10).pack(
+                side="left", padx=(0, 4))
+        self._option_row(3, "Clear after", tf)
+        remap_fonts(self.opt)
+
+    def _pref(self, **kw):
+        self.p.update(kw)
+        save_settings(self.app.settings)
+        c = self.app.cue
+        if c:      # apply to the message that's up now
+            if "colour" in kw or "flash" in kw:
+                c.update({k: v for k, v in kw.items()
+                          if k in ("colour", "flash")})
+            if "output" in kw or "overlay" in kw:
+                c.update({k: v for k, v in kw.items()
+                          if k in ("output", "overlay")})
+            self.app._show_cue()
+        self._build_options()
+
+    def _send_typed(self):
+        text = self.var.get().strip()
+        if text:
+            self.app.send_cue(text)
+            self.var.set("")
+
+    def _edit_preset(self, i):
+        text = simpledialog.askstring(APP_NAME, "Preset message:",
+                                      initialvalue=self.p["presets"][i],
+                                      parent=self)
+        if text is not None and text.strip():
+            self.p["presets"][i] = text.strip()[:40]
+            save_settings(self.app.settings)
+            self._build_presets()
+
+    def refresh_live(self):
+        c = self.app.cue
+        if c:
+            col = CUE_HEX.get(c["colour"], AMBER)
+            where = " + ".join(w for w, on in (("monitor", c.get("output")),
+                                               ("overlay", c.get("overlay")))
+                               if on) or "nowhere - switch one on"
+            self.live.config(text=f"{c['text']}", fg=col)
+            self.title(f"Talent message - LIVE on {where}")
+        else:
+            self.live.config(text="No message showing", fg=FAINT)
+            self.title("Talent message")
+        self.clear_btn.set_enabled(c is not None)
 
 
 class OverlayDesigner(tk.Toplevel):
@@ -4058,6 +4275,7 @@ API_COMMANDS = {
     "prog_start", "prog_stop", "prog_toggle",
     "next_segment", "mark", "reset_program",
     "dual_toggle", "tod_toggle", "log_toggle", "segments_toggle", "undo",
+    "message_clear",
 }
 
 
@@ -4168,6 +4386,21 @@ class ControlAPI:
                         path.rsplit("/", 1)[-1] in FONT_FILES:
                     f = os.path.join(FONT_DIR, path.rsplit("/", 1)[-1])
                     return self._file(f, "font/ttf")
+                if path == "/api/message":
+                    if not local or not self.headers.get("X-DA-Timer"):
+                        return self._send(403, {"ok": False, "error":
+                                                "local, with X-DA-Timer"})
+                    try:
+                        n = int(self.headers.get("Content-Length") or 0)
+                        data = json.loads(self.rfile.read(n) or b"{}")
+                        if not isinstance(data, dict):
+                            raise ValueError
+                    except ValueError:
+                        return self._send(400, {"ok": False,
+                                                "error": "send JSON like "
+                                                '{"text": "WRAP UP"}'})
+                    api.queue.put(("message", data))
+                    return self._send(200, {"ok": True})
                 if path.startswith("/api/action/"):
                     if not local:            # other computers: view only
                         return self._send(403, {"ok": False, "error":
@@ -4230,6 +4463,7 @@ class DATimerApp:
                         add="+")
         self._undo_stack = []          # most recent last
         self._due = {}                 # timetable for the slower tick jobs
+        self.cue = None                # live talent message (dict) or None
         self._seg_row_h = px(30)
         self._in_action = False
         feats = self.settings.setdefault("features", {})
@@ -4464,8 +4698,9 @@ class DATimerApp:
         self.full_btn = self._tool("Full screen GUI", self.toggle_fullscreen,
                                    "ghost")
         self.undo_btn.set_enabled(False)
+        self.msg_btn = self._tool("Message", self.open_messages)
         self.tool_groups = [(self.undo_btn,),
-                            (self.dual_btn, self.screen_btn),
+                            (self.dual_btn, self.screen_btn, self.msg_btn),
                             (self.segtimes_btn, self.log_btn, self.tod_btn),
                             (self.plan_btn, self.show_btn),
                             (self.deck_btn, self.sync_btn)]
@@ -4699,6 +4934,7 @@ class DATimerApp:
         put(self.toolbar_line, 0, ty - 1, W, 1)
         bx = pad
         need = {self.undo_btn: "undo", self.dual_btn: "dual",
+                self.msg_btn: "messages",
                 self.screen_btn: "dual", self.segtimes_btn: "running_order",
                 self.log_btn: "log", self.tod_btn: "clock",
                 self.deck_btn: "deck", self.sync_btn: "sync"}
@@ -5065,6 +5301,8 @@ class DATimerApp:
                                         "error": RED}[state])
         # Slower jobs on a timetable (the tick rate itself varies, below)
         now = time.monotonic()
+        if self.cue and self.cue.get("until") and now >= self.cue["until"]:
+            self.clear_cue()
         due = self._due
         if now >= due.get("status", 0):
             due["status"] = now + 1.0
@@ -5582,6 +5820,8 @@ class DATimerApp:
                                        self.current_show)
             if len(get_monitors(self.root)) == 1:
                 self.output.go_windowed()
+            if self.cue and self.cue.get("output"):
+                self.output.view.set_cue(self.cue)
             self.root.after(100, self.root.focus_force)
         self._toggle_look(self.dual_btn, True)
 
@@ -5685,7 +5925,15 @@ class DATimerApp:
             "log_toggle": self.toggle_log_panel,
             "segments_toggle": self.toggle_seg_panel,
             "undo": self.undo,
+            "message_clear": self.clear_cue,
         }
+        if isinstance(cmd, tuple) and cmd[0] == "message":
+            data = cmd[1]
+            self.send_cue(str(data.get("text", ""))[:120],
+                          colour=data.get("colour"),
+                          flash=data.get("flash"),
+                          seconds=data.get("seconds"))
+            return
         fn = actions.get(cmd)
         if fn:
             fn()
@@ -5737,6 +5985,8 @@ class DATimerApp:
             "toggles": {"dual": self.output is not None, "tod": self.tod_on,
                         "log": self.log_on, "segments": self.seg_panel_on},
             "overlay": self._overlay_info(),
+            "message": self._cue_public(),
+            "message_presets": list(self._cue_prefs()["presets"]),
         }
 
     def _overlay_info(self):
@@ -5770,6 +6020,77 @@ class DATimerApp:
             "fonts": fonts,
             "colours": {"ok": GREEN, "warn": AMBER, "over": RED},
         }
+
+    def _cue_public(self):
+        c = self.cue
+        if not c:
+            return None
+        return {"text": c["text"], "colour": CUE_HEX.get(c["colour"],
+                                                          "#ffb547"),
+                "flash": bool(c.get("flash")),
+                "output": bool(c.get("output")),
+                "overlay": bool(c.get("overlay"))}
+
+    # ------------------------------------------------------- messages --
+    def _cue_prefs(self):
+        p = self.settings.setdefault("messages", {})
+        p.setdefault("presets", list(DEFAULT_CUES))
+        p.setdefault("colour", "amber")
+        p.setdefault("flash", True)
+        p.setdefault("output", True)
+        p.setdefault("overlay", False)
+        p.setdefault("seconds", 0)
+        return p
+
+    def send_cue(self, text, colour=None, flash=None, seconds=None,
+                 output=None, overlay=None):
+        text = (text or "").strip()
+        if not text:
+            return
+        p = self._cue_prefs()
+        colour = colour if colour in CUE_HEX else p["colour"]
+        self.cue = {
+            "text": text.upper() if len(text) <= 40 else text,
+            "colour": colour,
+            "flash": p["flash"] if flash is None else bool(flash),
+            "output": p["output"] if output is None else bool(output),
+            "overlay": p["overlay"] if overlay is None else bool(overlay),
+            "until": None,
+        }
+        secs = p["seconds"] if seconds is None else seconds
+        try:
+            secs = float(secs or 0)
+        except (TypeError, ValueError):
+            secs = 0
+        if secs > 0:
+            self.cue["until"] = time.monotonic() + secs
+        self._log_event("MESSAGE", f"Message: {self.cue['text']}")
+        self._show_cue()
+
+    def clear_cue(self):
+        if self.cue is None:
+            return
+        self.cue = None
+        self._show_cue()
+
+    def _show_cue(self):
+        c = self.cue
+        if self.output is not None:
+            self.output.view.set_cue(c if c and c.get("output") else None)
+        self._toggle_look(self.msg_btn, c is not None)
+        self.api.state = self._api_snapshot()
+        dlg = getattr(self, "_msg_dialog", None)
+        if dlg is not None and dlg.winfo_exists():
+            dlg.refresh_live()
+
+    def open_messages(self):
+        dlg = getattr(self, "_msg_dialog", None)
+        if dlg is not None and dlg.winfo_exists():
+            dlg.deiconify()
+            dlg.lift()
+            dlg.entry.focus_set()
+            return
+        self._msg_dialog = MessageDialog(self.root, self)
 
     def _live_clock(self):
         """Fresh clock values for the overlay, read the moment it asks

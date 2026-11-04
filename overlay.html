@@ -106,6 +106,18 @@
          border-bottom: calc(3 * var(--u)) solid var(--accent);
          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #wrap.al-full #msg { align-self: center; }
+  #cue { align-self: center; max-width: 100%;
+         border-radius: calc(14 * var(--u));
+         padding: calc(14 * var(--u)) calc(40 * var(--u));
+         font-family: var(--ftb); font-weight: 700;
+         font-size: calc(52 * var(--u)); letter-spacing: .04em;
+         line-height: 1.1; white-space: nowrap; overflow: hidden;
+         text-overflow: ellipsis; color: #000; background: #ffb547;
+         box-shadow: 0 calc(6 * var(--u)) calc(30 * var(--u))
+                     rgba(0, 0, 0, .35); }
+  #cue.flash { animation: cueflash 1s steps(1, end) infinite; }
+  @keyframes cueflash { 50% { background: rgba(9, 12, 17, .9);
+                              color: var(--cue); } }
   #debug { position: absolute; left: 8px; top: 8px; font: 14px monospace;
            color: #ff4757; background: rgba(0,0,0,.6); padding: 4px 8px;
            display: none; }
@@ -114,6 +126,7 @@
 <body>
 <div id="frame">
   <div id="wrap" class="hidden al-full">
+    <div id="cue" class="hide"></div>
     <div id="msg" class="hide"></div>
     <div id="bar" class="shadow">
       <div class="blk" id="b-logo"><img id="logo" alt=""></div>
@@ -378,6 +391,25 @@
     set("msg", "hide", !msg);
     set("msg", "fs", size("message", 30));
     set("msg", "color", col("message", O.fg));
+
+    // ---- talent message (when sent to the overlay)
+    var M = S.message;
+    var cueOn = !!(M && M.overlay && M.text);
+    set("cue", "hide", !cueOn);
+    if (cueOn) {
+      set("cue", "text", M.text);
+      var cueEl = $("cue");
+      if (last.cueBg !== M.colour) {
+        last.cueBg = M.colour;
+        cueEl.style.background = M.colour;
+        cueEl.style.setProperty("--cue", M.colour);
+        var m = /^#?(..)(..)(..)$/.exec(M.colour) || [0, "ff", "b5", "47"];
+        var lum = (parseInt(m[1], 16) * 299 + parseInt(m[2], 16) * 587 +
+                   parseInt(m[3], 16) * 114) / 1000;
+        cueEl.style.color = lum > 140 ? "#000" : "#fff";
+      }
+      cls(cueEl, "flash", !!M.flash);
+    }
 
     cls(bar, "running", !!L.seg_running && !over);
     cls(bar, "over", over);

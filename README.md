@@ -7,6 +7,7 @@ Segment and program timer for broadcast Director's Assistants. It runs with a du
 
 * **Timing:** segment and program clocks with goals and over/under, back-timing to a hard out, and NTP or LTC time sync.
 * **Log:** notes and marks with time-of-day and program time, exported to Excel.
+* **Talent messages:** send cues like WRAP UP or 30 SECONDS across the top of the output monitor and, optionally, the video overlay.
 * **Stream Deck:** works directly over USB, or through the Elgato plugin (in `StreamDeck/`).
 * **Settings and safety:** a settings screen to switch features off, undo, and crash recovery.
 

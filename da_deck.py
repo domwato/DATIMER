@@ -40,6 +40,7 @@ ACTIONS = {
     "reset":      "Reset Program (hold 1s)",
     "undo":       "Undo Last Action",
     "display":    "Display Toggle",
+    "message":    "Talent Message",
 }
 OPTIONS = {
     "clock": {
@@ -56,6 +57,11 @@ OPTIONS = {
     "display": {
         "target": [("dual", "Output to monitor"), ("tod", "TOD clock"),
                    ("log", "Log panel"), ("segments", "Segments panel")],
+    },
+    "message": {
+        "slot": [("1", "Preset 1"), ("2", "Preset 2"), ("3", "Preset 3"),
+                 ("4", "Preset 4"), ("5", "Preset 5"), ("6", "Preset 6"),
+                 ("clear", "Clear the message")],
     },
 }
 
@@ -290,6 +296,26 @@ def design(key, state, holding=False):
                     main_color=C["amber"] if last else C["faint"],
                     sub=last or "nothing to undo",
                     sub_color=C["text"] if last else C["faint"])
+    if action == "message":
+        live = (state.get("message") or {}).get("text")
+        slot = key.get("slot", "1")
+        if slot == "clear":
+            return dict(label="MESSAGE", main="CLEAR", size=36,
+                        main_color=C["red"] if live else C["faint"],
+                        bg=C["redBg"] if live else C["bg"],
+                        sub=(live or "nothing showing")[:14],
+                        sub_color=C["text"] if live else C["faint"])
+        presets = state.get("message_presets") or []
+        try:
+            text = presets[int(slot) - 1]
+        except (ValueError, IndexError):
+            text = f"PRESET {slot}"
+        on = bool(live) and live == text.upper()
+        return dict(label="MESSAGE", main=text[:12], size=22 if len(text) > 7
+                    else 30, main_color=C["text"] if not on else "#000000",
+                    bg=C["amber"] if on else C["bg"],
+                    sub="LIVE" if on else "tap to send",
+                    sub_color="#000000" if on else C["faint"])
     if action == "display":
         target = key.get("target", "dual")
         names = {"dual": "OUTPUT", "tod": "TOD", "log": "LOG",
@@ -348,6 +374,19 @@ def press_command(key, state):
             return "mark"
         return "prog_toggle" if key.get("source", "segment").startswith("prog") \
             else "seg_toggle"
+    if a == "message":
+        slot = key.get("slot", "1")
+        live = (state.get("message") or {}).get("text")
+        if slot == "clear":
+            return "message_clear"
+        presets = state.get("message_presets") or []
+        try:
+            text = presets[int(slot) - 1]
+        except (ValueError, IndexError):
+            return None
+        if live and live == text.upper():
+            return "message_clear"
+        return ("message", {"text": text})
     return {"alltoggle": "all_toggle", "allstart": "all_start",
             "allstop": "all_stop", "segtoggle": "seg_toggle",
             "progtoggle": "prog_toggle", "next": "next_segment",
