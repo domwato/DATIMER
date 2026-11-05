@@ -264,7 +264,9 @@
     var seg = L.seg + (L.seg_running ? dt : 0);
     var prog = L.prog + (L.prog_running ? dt : 0);
     var C = O.colours || { ok: "#2bd47d", warn: "#ffb547", over: "#ff4757" };
+    var NS = !!S.noshow;            // "No show": time of day only
     function on(id) {
+      if (NS) return id === "tod";
       if (URL_ITEMS) return URL_ITEMS.some(function (k) {
         return ALIAS[k] === id; });
       return !!(it[id] && it[id].show);
@@ -309,7 +311,7 @@
     }
 
     // ---- logo
-    set("b-logo", "hide", !O.logo);
+    set("b-logo", "hide", !O.logo || NS);
     set("logo", "src", O.logo || "");
     $("logo").style.setProperty("--logo",
         String(84 * Math.min(Math.max(cfg.logo_size || 1, 0.3), 3)));
@@ -367,7 +369,7 @@
     // ---- time of day / timecode
     var ti = it.tod || {};
     set("b-tod", "hide", !on("tod"));
-    if (ti.mode === "tc" && L.tc) {
+    if (ti.mode === "tc" && L.tc && !NS) {
       set("tod-cap", "text", "Timecode"); set("tod", "text", L.tc);
     } else {
       set("tod-cap", "text", "Time of day");
@@ -411,7 +413,7 @@
       cls(cueEl, "flash", !!M.flash);
     }
 
-    cls(bar, "running", !!L.seg_running && !over);
+    cls(bar, "running", !!L.seg_running && !over && !NS);
     cls(bar, "over", over);
   }
   requestAnimationFrame(frame);

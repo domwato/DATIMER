@@ -30,7 +30,8 @@ Key actions (both ways)
   Next Segment         Shows the next segment number and name
   Log Mark             Timestamped MARK in the log
   Reset Program        HOLD 1 second (a tap does nothing - safety)
-  Display Toggle       Output to monitor / TOD / log panel / segments panel
+  Display Toggle       Output to monitor / TOD / log panel / segments panel /
+                       No show mode (output shows only the time of day)
   Undo Last Action     Undo a reset, next segment, stop/start or preset
 
 Other controllers (Bitfocus Companion, generic HTTP)
@@ -39,7 +40,7 @@ Other controllers (Bitfocus Companion, generic HTTP)
   Commands: all_start all_stop all_toggle seg_start seg_stop seg_toggle
             prog_start prog_stop prog_toggle next_segment mark reset_program
             dual_toggle tod_toggle log_toggle segments_toggle undo
-            message_clear
+            message_clear noshow_toggle noshow_on noshow_off
   Talent message:
   POST http://127.0.0.1:47800/api/message           header  X-DA-Timer: 1
        body (JSON): {"text": "WRAP UP", "colour": "red", "flash": true,

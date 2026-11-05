@@ -374,7 +374,7 @@ function design(c, holding) {
     case "display": {
       const target = c.settings.target || "dual";
       const names = { dual: "OUTPUT", tod: "TOD", log: "LOG",
-        segments: "SEGMENTS" };
+        segments: "SEGMENTS", noshow: "NO SHOW" };
       const on = !!t[target];
       return { label: names[target] || target.toUpperCase(),
         main: on ? "ON" : "OFF", size: 52,

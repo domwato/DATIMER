@@ -78,7 +78,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -557,6 +557,9 @@ DEFAULT_SHOW = {
     "segment_count": 0,      # segments in the show (0 = count the running order)
     "output_clock": "off",   # clock on the output: "off" | "tod" | "tc"
     "output_segments": True, # "SEGMENT 3 OF 8 - 5 LEFT" on the output
+    # "stack": elements in rows down the screen; "free": each element sits
+    # in its own box (output_layout rows carry "box": [x, y, w, h], 0-1)
+    "output_arrange": "stack",
     # Hard out for back-timing: mode "off" | "tod" (off-air time of day)
     # | "trt" (total program length)
     "hard_out": {"mode": "off", "tod": "", "trt": 0},
@@ -1456,6 +1459,35 @@ def output_row(show, eid):
     return {"id": eid, "show": False, "size": 1.0, "colour": ""}
 
 
+def clamp_box(box):
+    """An element box [x, y, w, h] (fractions of the screen) kept on screen
+    and not too small to grab."""
+    try:
+        x, y, w, h = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return None
+    w = min(max(w, 0.05), 1.0)
+    h = min(max(h, 0.04), 1.0)
+    x = min(max(x, 0.0), 1.0 - w)
+    y = min(max(y, 0.0), 1.0 - h)
+    return [round(x, 4), round(y, 4), round(w, 4), round(h, 4)]
+
+
+# Ready-made arrangements for the layout editor (boxes are x, y, w, h)
+OUTPUT_PRESETS = {
+    "side": {
+        "title": [0, 0, 1, 0.13],
+        "seg_title": [0, 0.15, 0.5, 0.08],
+        "seg_time": [0, 0.23, 0.5, 0.36],
+        "seg_status": [0, 0.59, 0.5, 0.07],
+        "show_title": [0.5, 0.15, 0.5, 0.08],
+        "show_time": [0.5, 0.23, 0.5, 0.36],
+        "clock": [0.2, 0.68, 0.6, 0.22],
+        "message": [0, 0.91, 1, 0.09],
+    },
+}
+
+
 class OutputView(tk.Frame):
     """What the presenter / floor sees. Used full screen by OutputWindow and
     small as the live preview in the layout editor."""
@@ -1477,6 +1509,17 @@ class OutputView(tk.Frame):
         self.clock_cap = FitLabel(self, "TIME OF DAY", fill=0.75,
                                   family=UI_BOLD)
         self.clock_time = FitLabel(self, "00:00:00", fill=0.88)
+        # "No show" mode: nothing but a big time of day
+        self.ns_cap = FitLabel(self, "TIME OF DAY", fill=0.75, family=UI_BOLD,
+                               text="TIME OF DAY")
+        self.ns_time = FitLabel(self, "00:00:00", text="00:00:00", fill=0.92)
+        self.noshow = False
+        self.editing = False
+        self.boxes = {}
+        self._handles = {}
+        self._drag = None
+        self._active = None
+        self._logos = False
         self.rule = tk.Frame(self, height=2)
         self.cue_bg = tk.Frame(self, bg="#ffb547")
         self.cue_lbl = FitLabel(self.cue_bg, "WRAP UP", fill=0.8,
@@ -1535,6 +1578,11 @@ class OutputView(tk.Frame):
         self.logo_left.set_image(left)
         self.logo_right.set_image(right)
 
+        self._show = show
+        self._logos = bool(left or right)
+        self._colours = (accent, colour("clock"))
+        self.ns_cap.configure(fg=accent)
+        self.ns_time.configure(fg=colour("clock"))
         for w in self.winfo_children():
             w.place_forget()
         bands = []
@@ -1555,44 +1603,180 @@ class OutputView(tk.Frame):
             self.clock_time.set_text(
                 "", "00:00:00:00" if self.clock_mode == "tc" else "00:00:00")
             self.clock_cap.set_text("TIME OF DAY", longest)
+        free = show.get("output_arrange") == "free"
         total = sum(wgt for _, wgt in bands) or 1
         y = 0.0
+        self.boxes = {}
         for name, wgt in bands:
             h = wgt / total
-            if name == "title":
-                if left or right:
-                    self.logo_left.place(relx=0.01, rely=y, relwidth=0.22,
-                                         relheight=h)
-                    self.logo_right.place(relx=0.77, rely=y, relwidth=0.22,
-                                          relheight=h)
-                    self.title_lbl.place(relx=0.24, rely=y, relwidth=0.52,
-                                         relheight=h)
-                else:
-                    self.title_lbl.place(relx=0.02, rely=y, relwidth=0.96,
-                                         relheight=h)
-            elif name == "clock":
-                # caption line above the time, like PROGRAM above its clock
-                self.clock_cap.place(relx=0, rely=y, relwidth=1,
-                                     relheight=h * 0.34)
-                self.clock_time.place(relx=0, rely=y + h * 0.34, relwidth=1,
-                                      relheight=h * 0.66)
-            elif name == "message":
-                self.rule.place(relx=0.25, rely=y, relwidth=0.5, height=2)
-                self.message_lbl.place(relx=0, rely=y, relwidth=1,
-                                       relheight=h)
-                self.rule.lift()
-            else:
-                widget = {"seg_title": self.seg_title,
-                          "seg_time": self.seg_time,
-                          "seg_status": self.seg_status,
-                          "show_title": self.show_title,
-                          "show_time": self.show_time}[name]
-                widget.place(relx=0, rely=y, relwidth=1, relheight=h)
+            box = (0.0, y, 1.0, h)
+            if free:
+                fixed = clamp_box(rows[name].get("box"))
+                if fixed:
+                    box = tuple(fixed)
+            self.boxes[name] = box
             y += h
+        if self.noshow:
+            self.ns_cap.place(relx=0.05, rely=0.2, relwidth=0.9,
+                              relheight=0.1)
+            self.ns_time.place(relx=0.02, rely=0.3, relwidth=0.96,
+                               relheight=0.45)
+        else:
+            for name, box in self.boxes.items():
+                self._place(name, *box)
+                if free:                       # later rows sit on top
+                    for w in self._parts(name):
+                        w.lift()
+            if self.editing:
+                self._draw_handles()
         if getattr(self, "_cue_key", None):       # a message is showing
             self._paint_cue()
             self.cue_bg.place(relx=0, rely=0, relwidth=1, relheight=0.3)
             self.cue_bg.lift()
+
+    def _parts(self, name):
+        return {"title": (self.title_lbl, self.logo_left, self.logo_right),
+                "seg_title": (self.seg_title,),
+                "seg_time": (self.seg_time,),
+                "seg_status": (self.seg_status,),
+                "show_title": (self.show_title,),
+                "show_time": (self.show_time,),
+                "clock": (self.clock_cap, self.clock_time),
+                "message": (self.message_lbl, self.rule)}[name]
+
+    def _place(self, name, x, y, w, h):
+        """Put one element in its box (fractions of the screen)."""
+        if name == "title":
+            if self._logos:
+                self.logo_left.place(relx=x + 0.01 * w, rely=y,
+                                     relwidth=0.22 * w, relheight=h)
+                self.logo_right.place(relx=x + 0.77 * w, rely=y,
+                                      relwidth=0.22 * w, relheight=h)
+                self.title_lbl.place(relx=x + 0.24 * w, rely=y,
+                                     relwidth=0.52 * w, relheight=h)
+            else:
+                self.title_lbl.place(relx=x + 0.02 * w, rely=y,
+                                     relwidth=0.96 * w, relheight=h)
+        elif name == "clock":
+            # caption line above the time, like PROGRAM above its clock
+            self.clock_cap.place(relx=x, rely=y, relwidth=w,
+                                 relheight=h * 0.34)
+            self.clock_time.place(relx=x, rely=y + h * 0.34, relwidth=w,
+                                  relheight=h * 0.66)
+        elif name == "message":
+            self.message_lbl.place(relx=x, rely=y, relwidth=w, relheight=h)
+            self.rule.place(relx=x + 0.25 * w, rely=y, relwidth=0.5 * w,
+                            height=2)
+            self.rule.lift()
+        else:
+            self._parts(name)[0].place(relx=x, rely=y, relwidth=w,
+                                       relheight=h)
+
+    # ---------------------------------------------- "no show" mode --
+    def set_noshow(self, on):
+        on = bool(on)
+        if on != self.noshow:
+            self.noshow = on
+            self.apply_show(self._show)
+
+    def update_noshow(self, text):
+        if self.noshow and self.ns_time.cget("text") != text:
+            self.ns_time.config(text=text)
+
+    # ------------------------------- drag to move (layout editor only) --
+    def set_editing(self, on_done):
+        """Let the elements be dragged about: press and drag one to move
+        it, drag the square in its corner to resize it."""
+        self.editing = True
+        self._on_done = on_done
+        for name in OUTPUT_DEFAULTS:
+            for w in self._parts(name):
+                self._bind_drag(w, name, False)
+                try:
+                    w.configure(cursor="fleur")
+                except tk.TclError:
+                    pass
+        self.apply_show(self._show)
+
+    def _bind_drag(self, w, name, resize):
+        w.bind("<ButtonPress-1>",
+               lambda e, n=name, r=resize: self._drag_start(e, n, r))
+        w.bind("<B1-Motion>", self._drag_move)
+        w.bind("<ButtonRelease-1>", self._drag_end)
+
+    def _handle(self, name):
+        if name not in self._handles:
+            lines = [tk.Frame(self, bg=FAINT, bd=0) for _ in range(4)]
+            grip = tk.Frame(self, bg=CYAN, bd=0)
+            for w in lines:
+                self._bind_drag(w, name, False)
+            self._bind_drag(grip, name, True)
+            for cur in ("size_nw_se", "bottom_right_corner"):
+                try:
+                    grip.configure(cursor=cur)
+                    break
+                except tk.TclError:
+                    pass
+            self._handles[name] = (lines, grip)
+        return self._handles[name]
+
+    def _draw_handles(self):
+        for lines, grip in self._handles.values():
+            for w in lines + [grip]:
+                w.place_forget()
+        g = max(px(9), 7)
+        for name, (x, y, w, h) in self.boxes.items():
+            lines, grip = self._handle(name)
+            col = CYAN if name == self._active else "#6b7785"
+            for f in lines:
+                f.configure(bg=col)
+            top, bottom, left, right = lines
+            top.place(relx=x, rely=y, relwidth=w, height=1)
+            bottom.place(relx=x, rely=y + h, relwidth=w, height=1, y=-1)
+            left.place(relx=x, rely=y, relheight=h, width=1)
+            right.place(relx=x + w, rely=y, relheight=h, width=1, x=-1)
+            grip.configure(bg=col)
+            grip.place(relx=x + w, rely=y + h, x=-g, y=-g, width=g, height=g)
+            for f in lines + [grip]:
+                f.lift()
+
+    def _drag_start(self, e, name, resize):
+        if not self.editing or name not in self.boxes:
+            return
+        self._drag = {"name": name, "resize": resize, "sx": e.x_root,
+                      "sy": e.y_root, "box": tuple(self.boxes[name]),
+                      "W": max(self.winfo_width(), 1),
+                      "H": max(self.winfo_height(), 1)}
+        self._active = name
+        for w in self._parts(name):             # bring it to the front
+            w.lift()
+        self._draw_handles()
+
+    def _drag_move(self, e):
+        d = self._drag
+        if not d:
+            return
+        dx = (e.x_root - d["sx"]) / d["W"]
+        dy = (e.y_root - d["sy"]) / d["H"]
+        x, y, w, h = d["box"]
+
+        def snap(v):
+            return round(v / 0.005) * 0.005
+        if d["resize"]:
+            box = [x, y, min(snap(w + dx), 1 - x), min(snap(h + dy), 1 - y)]
+        else:
+            box = [snap(x + dx), snap(y + dy), w, h]
+        box = tuple(clamp_box(box))
+        if box != self.boxes.get(d["name"]):
+            self.boxes[d["name"]] = box
+            self._place(d["name"], *box)
+            self._draw_handles()
+
+    def _drag_end(self, _e=None):
+        d, self._drag = self._drag, None
+        if d and tuple(self.boxes[d["name"]]) != tuple(d["box"]):
+            self._on_done(d["name"], {k: list(v)
+                                      for k, v in self.boxes.items()})
 
     def set_cue(self, cue):
         """Show a talent message as a band across the top (None hides it)."""
@@ -1787,6 +1971,10 @@ class OutputLayoutEditor(tk.Toplevel):
             b.pack(side="left", padx=(0, 6))
             self.swatches[key] = b
 
+        # arrangement: rows down the screen, or boxes you drag about
+        self.arr_frame = tk.Frame(left, bg=SURFACE)
+        self.arr_frame.pack(anchor="w", fill="x", pady=(0, 10))
+
         self.list_frame = tk.Frame(left, bg=SURFACE)
         self.list_frame.pack(fill="x")
 
@@ -1797,13 +1985,18 @@ class OutputLayoutEditor(tk.Toplevel):
                  font=(UI_BOLD, 10)).pack(anchor="w", pady=(0, 4))
         mon = app._monitor_choice()
         aspect = (mon["h"] / mon["w"]) if mon.get("w") else 9 / 16
-        pw = px(420)
+        pw = px(460)
         holder = tk.Frame(right, width=pw, height=int(pw * aspect), bg=BORDER,
                           highlightthickness=1, highlightbackground=BORDER)
         holder.pack()
         holder.pack_propagate(False)
         self.preview = OutputView(holder, self.show)
         self.preview.pack(fill="both", expand=True)
+        self.preview.set_editing(self._dragged)
+        tk.Label(right, text="Drag anything in the preview to move it. Drag "
+                             "the small square in its corner to resize it.",
+                 bg=SURFACE, fg=MUTED, font=(UI_FONT, 10), wraplength=pw,
+                 justify="left").pack(anchor="w", pady=(6, 0))
         tk.Label(right, text="Tip: double-click the output to switch it "
                              "between full screen and a window.",
                  bg=SURFACE, fg=FAINT, font=(UI_FONT, 9), wraplength=pw,
@@ -1831,10 +2024,23 @@ class OutputLayoutEditor(tk.Toplevel):
 
     # ----------------------------------------------------------- rows --
     def _build_rows(self):
+        for w in self.arr_frame.winfo_children():
+            w.destroy()
+        tk.Label(self.arr_frame, text="Arrange", bg=SURFACE, fg=TEXT,
+                 font=(UI_BOLD, 11)).pack(side="left", padx=(0, 10))
+        mode = self._arrangement()
+        for val, text, width in (("stack", "Stacked", 84),
+                                 ("side", "Side by side", 112),
+                                 ("free", "Custom", 80)):
+            ModernButton(self.arr_frame, text,
+                         lambda v=val: self._arrange(v), SURFACE,
+                         "on" if mode == val else "ghost", font_px=11,
+                         size=(width, 28)).pack(side="left", padx=(0, 6))
         for w in self.list_frame.winfo_children():
             w.destroy()
+        free = self.show.get("output_arrange") == "free"
         for col, text in enumerate(("Show", "Element", "Size", "Colour", "",
-                                    "Order")):
+                                    "On top" if free else "Order")):
             tk.Label(self.list_frame, text=text, bg=SURFACE, fg=FAINT,
                      anchor="w", font=(UI_BOLD, 9)).grid(
                 row=0, column=col, sticky="w", pady=(0, 4),
@@ -1935,7 +2141,57 @@ class OutputLayoutEditor(tk.Toplevel):
     def _size(self, r, step):
         cur = float(r.get("size") or 1.0)
         i = min(range(len(self.SIZES)), key=lambda k: abs(self.SIZES[k] - cur))
-        r["size"] = self.SIZES[min(max(i + step, 0), len(self.SIZES) - 1)]
+        new = self.SIZES[min(max(i + step, 0), len(self.SIZES) - 1)]
+        r["size"] = new
+        box = clamp_box(r.get("box"))
+        if self.show.get("output_arrange") == "free" and box and new != cur:
+            # custom layout: grow / shrink the box around its centre
+            f = new / cur
+            x, y, w, h = box
+            nw, nh = min(w * f, 1.0), min(h * f, 1.0)
+            r["box"] = clamp_box([x + (w - nw) / 2, y + (h - nh) / 2, nw, nh])
+        self._build_rows()
+        self._changed()
+
+    # ------------------------------------------------------ arranging --
+    def _arrangement(self):
+        if self.show.get("output_arrange") != "free":
+            return "stack"
+        side = OUTPUT_PRESETS["side"]
+        boxes = {r["id"]: clamp_box(r.get("box")) for r in self.rows}
+        if all(boxes.get(k) == clamp_box(v) for k, v in side.items()):
+            return "side"
+        return "free"
+
+    def _arrange(self, how):
+        if how == "stack":
+            self.show["output_arrange"] = "stack"
+        elif how == "side":
+            for r in self.rows:
+                box = OUTPUT_PRESETS["side"].get(r["id"])
+                if box:
+                    r["box"] = clamp_box(box)
+            self.show["output_arrange"] = "free"
+        else:                    # custom: start from what's on screen now
+            self._capture(self.preview.boxes)
+            self.show["output_arrange"] = "free"
+        self._build_rows()
+        self._changed()
+
+    def _capture(self, boxes):
+        for r in self.rows:
+            if r["id"] in boxes:
+                r["box"] = clamp_box(boxes[r["id"]])
+
+    def _dragged(self, name, boxes):
+        """An element was dragged in the preview: the layout becomes custom
+        (what was on screen is kept as the starting point)."""
+        if self.show.get("output_arrange") != "free":
+            self._capture(boxes)
+            self.show["output_arrange"] = "free"
+        for r in self.rows:
+            if r["id"] == name:
+                r["box"] = clamp_box(boxes[name])
         self._build_rows()
         self._changed()
 
@@ -1988,6 +2244,8 @@ class OutputLayoutEditor(tk.Toplevel):
         for r in self.rows:
             r.update(show=r["id"] not in ("seg_status", "clock"), size=1.0,
                      colour="")
+            r.pop("box", None)
+        self.show["output_arrange"] = "stack"
         self._build_rows()
         self._changed()
 
@@ -2817,7 +3075,7 @@ class ShowEditor(tk.Toplevel):
 
     def edit_layout(self):
         def done(show):
-            for k in ("output_layout", "bg", "fg", "accent"):
+            for k in ("output_layout", "output_arrange", "bg", "fg", "accent"):
                 self.show[k] = show[k]
             self._refresh_visuals()
             self._layout_note()
@@ -4275,7 +4533,7 @@ API_COMMANDS = {
     "prog_start", "prog_stop", "prog_toggle",
     "next_segment", "mark", "reset_program",
     "dual_toggle", "tod_toggle", "log_toggle", "segments_toggle", "undo",
-    "message_clear",
+    "message_clear", "noshow_toggle", "noshow_on", "noshow_off",
 }
 
 
@@ -4464,6 +4722,7 @@ class DATimerApp:
         self._undo_stack = []          # most recent last
         self._due = {}                 # timetable for the slower tick jobs
         self.cue = None                # live talent message (dict) or None
+        self.noshow = False            # output shows only the time of day
         self._seg_row_h = px(30)
         self._in_action = False
         feats = self.settings.setdefault("features", {})
@@ -4699,8 +4958,11 @@ class DATimerApp:
                                    "ghost")
         self.undo_btn.set_enabled(False)
         self.msg_btn = self._tool("Message", self.open_messages)
+        self.noshow_btn = self._tool("No show", self.toggle_noshow)
+        self.noshow_btn.menu_label = "No show (time of day only)"
         self.tool_groups = [(self.undo_btn,),
-                            (self.dual_btn, self.screen_btn, self.msg_btn),
+                            (self.dual_btn, self.screen_btn, self.noshow_btn,
+                             self.msg_btn),
                             (self.segtimes_btn, self.log_btn, self.tod_btn),
                             (self.plan_btn, self.show_btn),
                             (self.deck_btn, self.sync_btn)]
@@ -4934,7 +5196,7 @@ class DATimerApp:
         put(self.toolbar_line, 0, ty - 1, W, 1)
         bx = pad
         need = {self.undo_btn: "undo", self.dual_btn: "dual",
-                self.msg_btn: "messages",
+                self.msg_btn: "messages", self.noshow_btn: "dual",
                 self.screen_btn: "dual", self.segtimes_btn: "running_order",
                 self.log_btn: "log", self.tod_btn: "clock",
                 self.deck_btn: "deck", self.sync_btn: "sync"}
@@ -5282,6 +5544,8 @@ class DATimerApp:
             self.output.update_times(oseg, show, status, col, ocol)
             self.output.update_extras(self._out_seg_caption(),
                                       *self._out_clock())
+            if self.noshow:
+                self.output.view.update_noshow(f"{self.clock.now():%H:%M:%S}")
         if self.tod_on:
             tod = f"{self.clock.now():%H:%M:%S}"
             if self.tod_lbl.cget("text") != tod:
@@ -5520,7 +5784,7 @@ class DATimerApp:
 
     def open_output_layout(self):
         def done(show):
-            for k in ("output_layout", "bg", "fg", "accent"):
+            for k in ("output_layout", "output_arrange", "bg", "fg", "accent"):
                 self.current_show[k] = show[k]
             if self.current_show.get("name"):
                 save_show(self.current_show)
@@ -5822,6 +6086,9 @@ class DATimerApp:
                 self.output.go_windowed()
             if self.cue and self.cue.get("output"):
                 self.output.view.set_cue(self.cue)
+            if self.noshow:
+                self.output.view.set_noshow(True)
+                self.output.view.update_noshow(f"{self.clock.now():%H:%M:%S}")
             self.root.after(100, self.root.focus_force)
         self._toggle_look(self.dual_btn, True)
 
@@ -5840,6 +6107,27 @@ class DATimerApp:
             self.open_output()
         else:
             self.close_output()
+
+    def set_noshow(self, on):
+        """No show mode: the output (and video overlay) show only the time
+        of day - for between shows, rehearsals and breaks."""
+        on = bool(on)
+        if on == self.noshow:
+            return
+        self.noshow = on
+        if self.output is not None:
+            self.output.view.set_noshow(on)
+            if on:
+                self.output.view.update_noshow(f"{self.clock.now():%H:%M:%S}")
+        self._toggle_look(self.noshow_btn, on)
+        self._log_event("NOSHOW", "No show mode on (time of day only)" if on
+                        else "No show mode off")
+        api = getattr(self, "api", None)
+        if api is not None:
+            api.state = self._api_snapshot()
+
+    def toggle_noshow(self):
+        self.set_noshow(not self.noshow)
 
     def _more_menu(self):
         menu = tk.Menu(self.root, tearoff=0, font=(UI_FONT, 11), bg=SURFACE_2,
@@ -5926,6 +6214,9 @@ class DATimerApp:
             "segments_toggle": self.toggle_seg_panel,
             "undo": self.undo,
             "message_clear": self.clear_cue,
+            "noshow_toggle": self.toggle_noshow,
+            "noshow_on": lambda: self.set_noshow(True),
+            "noshow_off": lambda: self.set_noshow(False),
         }
         if isinstance(cmd, tuple) and cmd[0] == "message":
             data = cmd[1]
@@ -5982,7 +6273,9 @@ class DATimerApp:
             },
             "undo": self._undo_stack[-1]["label"] if self._undo_stack
             else None,
-            "toggles": {"dual": self.output is not None, "tod": self.tod_on,
+            "noshow": self.noshow,
+            "toggles": {"noshow": self.noshow,
+                        "dual": self.output is not None, "tod": self.tod_on,
                         "log": self.log_on, "segments": self.seg_panel_on},
             "overlay": self._overlay_info(),
             "message": self._cue_public(),

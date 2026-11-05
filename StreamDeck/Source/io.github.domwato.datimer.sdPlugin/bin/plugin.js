@@ -4150,7 +4150,8 @@ function design(c, holding) {
         dual: "OUTPUT",
         tod: "TOD",
         log: "LOG",
-        segments: "SEGMENTS"
+        segments: "SEGMENTS",
+        noshow: "NO SHOW"
       };
       const on = !!t[target];
       return {

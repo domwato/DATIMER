@@ -56,7 +56,8 @@ OPTIONS = {
     },
     "display": {
         "target": [("dual", "Output to monitor"), ("tod", "TOD clock"),
-                   ("log", "Log panel"), ("segments", "Segments panel")],
+                   ("log", "Log panel"), ("segments", "Segments panel"),
+                   ("noshow", "No show mode (time of day only)")],
     },
     "message": {
         "slot": [("1", "Preset 1"), ("2", "Preset 2"), ("3", "Preset 3"),
@@ -319,7 +320,7 @@ def design(key, state, holding=False):
     if action == "display":
         target = key.get("target", "dual")
         names = {"dual": "OUTPUT", "tod": "TOD", "log": "LOG",
-                 "segments": "SEGMENTS"}
+                 "segments": "SEGMENTS", "noshow": "NO SHOW"}
         on = bool(t.get(target))
         return dict(label=names.get(target, target.upper()),
                     main="ON" if on else "OFF", size=52,
