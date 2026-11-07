@@ -37,11 +37,14 @@ Without it, PNG and GIF logos still work.
 """
 
 import json
+import math
 import os
 import queue
 import re
+import secrets
 import shutil
 import sys
+import tempfile
 import weakref
 import threading
 import time
@@ -78,7 +81,7 @@ def author_logo(height):
     return None
 IS_MAC = sys.platform == "darwin"
 MOD = "\u2318" if IS_MAC else "Ctrl+"        # shortcut modifier, for help text
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # --------------------------------------------------------------------------
 # Look & feel: a broadcast control-room surface. Graphite panels, tally-light
@@ -517,24 +520,99 @@ def data_dir(*parts):
     return folder
 
 
+# --------------------------------------------------------------------------
+# Saving and loading files safely.
+# Every JSON file DA Timer keeps (settings, show profiles, the log backup,
+# crash recovery) goes through save_json / load_json:
+#  * a complete new copy is written beside the real file (unique temp name,
+#    flushed and fsynced) and then swapped in with os.replace, so a crash or
+#    power cut leaves the old file or the new one, never half a file;
+#  * a file that won't load is kept (renamed *.damaged-<time>) and reported,
+#    never silently replaced by empty defaults;
+#  * save / load problems are collected in PROBLEMS and shown in the window.
+# --------------------------------------------------------------------------
+PROBLEMS = []                 # [{"when", "kind", "what", "error"}], newest last
+_SAVE_LOCK = threading.RLock()
+_FAILING = {}                 # what -> first failure time (cleared on success)
+
+
+def note_problem(kind, what, error):
+    PROBLEMS.append({"when": datetime.now().strftime("%H:%M:%S"),
+                     "kind": kind, "what": what, "error": str(error)})
+    del PROBLEMS[:-50]
+
+
+def atomic_write_json(path, value, indent=None):
+    folder = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=folder, suffix=".tmp",
+                               prefix="." + os.path.basename(path) + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(value, f, indent=indent, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(5):          # closed before replace (Windows)
+            try:
+                os.replace(tmp, path)
+                tmp = None
+                return
+            except PermissionError:       # antivirus / OneDrive holding it
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def save_json(path, value, what, indent=None):
+    """Save atomically. True if saved; a failure is reported, not hidden."""
+    try:
+        with _SAVE_LOCK:
+            atomic_write_json(path, value, indent)
+        _FAILING.pop(what, None)
+        return True
+    except Exception as exc:
+        if what not in _FAILING:
+            _FAILING[what] = time.time()
+            note_problem("save", what, exc)
+        return False
+
+
+def load_json(path, what):
+    """The file's JSON, or None if it doesn't exist. A file that can't be
+    read or parsed is kept as *.damaged-<time> and reported, so the next
+    save can't destroy what might still be recovered from it."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        keep = f"{path}.damaged-{datetime.now():%Y%m%d-%H%M%S}"
+        try:
+            shutil.copy2(path, keep)
+            note_problem("load", what, f"{exc} (kept a copy: "
+                                       f"{os.path.basename(keep)})")
+        except OSError as exc2:
+            note_problem("load", what, f"{exc} / {exc2}")
+        return None
+
+
 def settings_path():
     return os.path.join(data_dir(), "settings.json")
 
 
 def load_settings():
-    try:
-        with open(settings_path(), "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    data = load_json(settings_path(), "Settings")
+    return data if isinstance(data, dict) else {}
 
 
 def save_settings(data):
-    try:
-        with open(settings_path(), "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    except Exception:
-        pass
+    return save_json(settings_path(), data, "Settings", indent=2)
 
 
 # --------------------------------------------------------------------------
@@ -569,8 +647,46 @@ LOGO_TYPES = ([("Images", "*.png *.jpg *.jpeg *.gif *.bmp")]
               if Image else [("PNG / GIF images", "*.png *.gif")])
 
 
+_RESERVED_NAMES = {"con", "prn", "aux", "nul"} | {
+    f"{p}{n}" for p in ("com", "lpt") for n in range(1, 10)}
+
+
 def _slug(name):
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or "show"
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", str(name)).strip("_") or "show"
+    if slug.lower() in _RESERVED_NAMES:        # names Windows won't allow
+        slug += "_show"
+    return slug[:100]
+
+
+def show_key(name):
+    """One identity rule for show files: two names with the same key are
+    the same file (case-insensitive, as on Windows and most Macs)."""
+    return _slug(name).lower()
+
+
+def find_show(name, ignore=None):
+    """The saved show that `name` would overwrite, if any (ignoring the
+    show called `ignore`, e.g. the one being renamed)."""
+    key, skip = show_key(name), show_key(ignore) if ignore else None
+    for other in list_shows():
+        if show_key(other) == key and show_key(other) != skip:
+            return other
+    return None
+
+
+def same_show_file(a, b):
+    """True if shows `a` and `b` are stored in the same file."""
+    if show_key(a) != show_key(b):
+        return False
+    pa, pb = show_path(a), show_path(b)
+    if pa == pb:
+        return True
+    if os.path.exists(pa) and os.path.exists(pb):
+        try:
+            return os.path.samefile(pa, pb)    # case-insensitive disk
+        except OSError:
+            return False
+    return True                 # only one exists: it IS the show's file
 
 
 def list_shows():
@@ -587,16 +703,13 @@ def list_shows():
 
 
 def copy_show(show):
-    """Copy a show dict, including its own copy of the running order."""
-    out = dict(DEFAULT_SHOW, **show)
-    out["plan"] = [dict(row) for row in show.get("plan") or []]
+    """A fully independent copy of a show (running order, layout boxes,
+    overlay design... nothing shared with the original)."""
+    import copy
+    out = copy.deepcopy(dict(DEFAULT_SHOW, **show))
+    out["plan"] = [dict(row) for row in out.get("plan") or []]
     out["hard_out"] = dict(DEFAULT_SHOW["hard_out"],
-                           **(show.get("hard_out") or {}))
-    if show.get("output_layout"):
-        out["output_layout"] = [dict(r) for r in show["output_layout"]]
-    if show.get("overlay"):
-        import copy
-        out["overlay"] = copy.deepcopy(show["overlay"])
+                           **(out.get("hard_out") or {}))
     return out
 
 
@@ -615,22 +728,25 @@ def parse_tod(text):
     return h * 3600 + m * 60 + sec
 
 
+def show_path(name):
+    return os.path.join(data_dir("shows"), _slug(name) + ".json")
+
+
 def load_show(name):
     show = copy_show(DEFAULT_SHOW)
     if name:
-        try:
-            with open(os.path.join(data_dir("shows"), _slug(name) + ".json"),
-                      encoding="utf-8") as f:
-                show = copy_show(json.load(f))
-        except Exception:
-            pass
+        data = load_json(show_path(name), f"Show '{name}'")
+        if isinstance(data, dict):
+            try:
+                show = copy_show(data)
+            except Exception as exc:
+                note_problem("load", f"Show '{name}'", exc)
     return show
 
 
 def save_show(show):
-    with open(os.path.join(data_dir("shows"), _slug(show["name"]) + ".json"),
-              "w", encoding="utf-8") as f:
-        json.dump(show, f, indent=2)
+    return save_json(show_path(show["name"]), show,
+                     f"Show '{show['name']}'", indent=2)
 
 
 def delete_show(name):
@@ -648,11 +764,30 @@ def import_logo(src):
     return dest
 
 
+LOGO_EXTS = (".png", ".gif", ".jpg", ".jpeg", ".bmp")
+
+
 def logo_path(stored):
-    if not stored:
+    """The stored logo name -> its file, but only a plain image file inside
+    the logos folder: a show profile can't point this at ../settings.json
+    or an absolute path (which the overlay would then serve)."""
+    if not stored or not isinstance(stored, str):
         return ""
-    p = os.path.join(data_dir("logos"), stored)
-    return p if os.path.exists(p) else ""
+    name = os.path.basename(stored.replace("\\", "/"))
+    if name != stored or name in ("", ".", "..") or \
+            os.path.splitext(name)[1].lower() not in LOGO_EXTS:
+        return ""
+    folder = os.path.realpath(data_dir("logos"))
+    p = os.path.realpath(os.path.join(folder, name))
+    if os.path.dirname(p) != folder or not os.path.isfile(p):
+        return ""
+    try:
+        with open(p, "rb") as f:
+            head = f.read(12)
+    except OSError:
+        return ""
+    images = (b"\x89PNG", b"GIF8", b"\xff\xd8\xff", b"BM")
+    return p if head.startswith(images) else ""
 
 
 # --------------------------------------------------------------------------
@@ -738,9 +873,18 @@ class Stopwatch:
         return self.base
 
 
+# One rounding rule everywhere (app, output, overlay, Stream Deck, plugin,
+# exports): whole seconds, dropping the fraction - 2.5 s shows as 00:02 -
+# the same way the main clocks count. Over/under figures are worked out
+# from those whole seconds, so every screen agrees.
+def whole(seconds):
+    """Seconds -> whole seconds (fraction dropped toward zero)."""
+    return int(seconds or 0)
+
+
 def fmt_short(seconds):
     """MM:SS under an hour, H:MM:SS above (for over/under readouts)."""
-    s = int(round(abs(seconds)))
+    s = whole(abs(seconds))
     if s >= 3600:
         return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
     return f"{s // 60:02d}:{s % 60:02d}"
@@ -748,7 +892,7 @@ def fmt_short(seconds):
 
 def fmt_delta(seconds):
     """Signed over/under, e.g. +01:23 (over) or -00:42 (under)."""
-    if int(round(seconds)) == 0:
+    if whole(seconds) == 0:
         return "00:00"
     return ("+" if seconds > 0 else "-") + fmt_short(seconds)
 
@@ -2251,6 +2395,7 @@ class OutputLayoutEditor(tk.Toplevel):
 
     def _close(self):
         master = self.master
+        self.app.end_output_preview()
         self.destroy()
         if isinstance(master, tk.Toplevel):       # hand the grab back
             try:
@@ -2851,7 +2996,8 @@ class OverlayDialog(tk.Toplevel):
         urls = [("On this computer", f"http://127.0.0.1:{port}/overlay")]
         ip = lan_address()
         if app.api.lan and ip:
-            urls.append(("From another computer", f"http://{ip}:{port}/overlay"))
+            urls.append(("From another computer", f"http://{ip}:{port}"
+                         f"/overlay?key={quote(app.api.key)}"))
         for label, url in urls:
             tk.Label(self, text=label, bg=SURFACE, fg=TEXT,
                      font=(UI_BOLD, 11)).grid(row=r, column=0, sticky="w",
@@ -3120,18 +3266,25 @@ class ShowEditor(tk.Toplevel):
             return
         self.show["segment_label"] = self.show["segment_label"] or "Segment"
         self.show["show_label"] = self.show["show_label"] or "Program"
-        renamed = self.original_name and \
-            _slug(self.original_name) != _slug(self.show["name"])
-        if (self.is_new or renamed) and \
-                _slug(self.show["name"]).lower() in \
-                [_slug(n).lower() for n in list_shows()]:
-            if not messagebox.askyesno(
-                    APP_NAME, f"A show called '{self.show['name']}' already "
-                              f"exists. Replace it?", parent=self):
-                return
-        save_show(self.show)
-        if renamed:
-            delete_show(self.original_name)
+        # renaming only the capitals (news -> News) is the same show: no
+        # "already exists" question, and never delete the file just saved
+        clash = find_show(self.show["name"],
+                          ignore=None if self.is_new else self.original_name)
+        if clash and not messagebox.askyesno(
+                APP_NAME, f"A show called '{clash}' already exists"
+                          + (f" (it uses the same file as "
+                             f"'{self.show['name']}')"
+                             if clash != self.show["name"] else "")
+                          + ". Replace it?", parent=self):
+            return
+        if not save_show(self.show):
+            messagebox.showerror(APP_NAME, "Couldn't save the show - see the "
+                                 "warning at the top of the window.",
+                                 parent=self)
+            return
+        if self.original_name and not self.is_new and \
+                not same_show_file(self.original_name, self.show["name"]):
+            delete_show(self.original_name)       # checked AFTER saving
         self.on_save(self.show)
         self.destroy()
 
@@ -3852,8 +4005,12 @@ class DeckSetup(tk.Toplevel):
                          f"and it will be picked up automatically.")
         if deck is not None and deck.elgato_running:
             hints.append("\u26a0  The Elgato Stream Deck app is running \u2014 "
-                         "quit it (right-click its tray icon \u2192 Quit) so it "
-                         "doesn't fight DA Timer for the keys.")
+                         + ("quit it (Stream Deck icon in the menu bar "
+                            "\u2192 Quit Stream Deck)" if IS_MAC else
+                            "quit it (right-click its tray icon \u2192 Quit)")
+                         + " so it doesn't fight DA Timer for the keys, or "
+                         "turn off Stream Deck (direct USB) in Settings and "
+                         "use the Elgato plugin instead.")
         if deck is not None and deck.error:
             hints.append(
                 "On a Mac, install hidapi (brew install hidapi) or use the "
@@ -4300,6 +4457,27 @@ class PlanEditor(tk.Toplevel):
 from datetime import datetime
 
 
+def undo_log_changes(entries, snap):
+    """Reverse one action's own log changes, keyed by entry id:
+    entries it added go, entries it removed come back where they were, and
+    entries it changed go back - unless they've been edited since, in which
+    case the later edit wins. Anything else (notes logged or edited after
+    the action) is left exactly as it is."""
+    added = set(snap.get("log_added", ()))
+    changed = snap.get("log_changed", {})
+    out = []
+    for e in entries:
+        if e.get("id") in added:
+            continue
+        pair = changed.get(e.get("id"))
+        if pair is not None and e == pair[1]:
+            e = dict(pair[0])
+        out.append(e)
+    for n, e in sorted(snap.get("log_removed", ()), key=lambda t: t[0]):
+        out.insert(min(n, len(out)), dict(e))
+    return out
+
+
 class ShowLog:
     clock = staticmethod(datetime.now)     # replaced by DA Timer's time source
 
@@ -4314,6 +4492,7 @@ class ShowLog:
 
     def add(self, kind, note, program, seg_no, seg_time, tod=None):
         self.entries.append({
+            "id": secrets.token_hex(6),
             "tod": tod or self.clock().isoformat(timespec="seconds"),
             "program": float(program), "seg_no": int(seg_no),
             "seg_time": float(seg_time), "type": kind, "note": note})
@@ -4337,24 +4516,21 @@ class ShowLog:
         self.save_backup()
 
     def save_backup(self):
-        try:
-            with open(self.backup_path(), "w", encoding="utf-8") as f:
-                json.dump({"entries": self.entries, "segments": self.segments,
-                           "dirty": self.dirty}, f)
-        except Exception:
-            pass
+        return save_json(self.backup_path(),
+                         {"entries": self.entries, "segments": self.segments,
+                          "dirty": self.dirty}, "Log backup")
 
     @classmethod
     def load_backup(cls):
         log = cls()
-        try:
-            with open(cls.backup_path(), encoding="utf-8") as f:
-                data = json.load(f)
-            log.entries = data.get("entries", [])
-            log.segments = data.get("segments", {})
+        data = load_json(cls.backup_path(), "Log backup")
+        if isinstance(data, dict):
+            log.entries = [e for e in data.get("entries", [])
+                           if isinstance(e, dict)]
+            log.segments = data.get("segments", {}) or {}
             log.dirty = data.get("dirty", bool(log.entries))
-        except Exception:
-            pass
+        for e in log.entries:                   # stable ids (see undo)
+            e.setdefault("id", secrets.token_hex(6))
         return log
 
 
@@ -4519,12 +4695,26 @@ def export_log_csv(path, show_name, log):
 
 # --------------------------------------------------------------------------
 # Local control API (used by the Stream Deck plugin; also works with
-# Bitfocus Companion's generic HTTP module). Listens on 127.0.0.1 only.
-# Actions need the "X-DA-Timer" header, so a web page in a browser can't
-# trigger them behind your back.
+# Bitfocus Companion's generic HTTP module). Listens on 127.0.0.1 unless
+# "Video overlay on other computers" is on.
+#
+# Who may do what:
+#  * Every request must name this computer in its Host header (a numeric
+#    address, localhost or this PC's own name). That stops "DNS rebinding",
+#    where a web page re-points its own domain at 127.0.0.1 to reach us.
+#  * A browser Origin, when sent, must be this server too.
+#  * Commands: POST only, from this computer only, with the X-DA-Timer
+#    header (a custom header a web page can't add cross-site).
+#  * Other computers (LAN mode) can only view, and need the overlay key
+#    (?key=... in the address DA Timer shows you).
+#  * No cross-site reads (no wildcard CORS), short socket timeouts, a cap on
+#    connections and body size, and a bounded command queue.
 # --------------------------------------------------------------------------
+import ipaddress
+import secrets
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, quote
 
 API_PORT = 47800
 API_COMMANDS = {
@@ -4564,13 +4754,86 @@ def lan_address():
         return None
 
 
+API_MAX_BODY = 8192          # bytes; /api/message is the only body
+API_MAX_QUEUE = 64           # queued commands waiting for the GUI
+API_MAX_CLIENTS = 32         # connections handled at once
+API_SOCKET_TIMEOUT = 5       # seconds a connection may sit idle
+
+
+def _host_name(value):
+    """'Host' / Origin host part, lower case, without port or brackets."""
+    value = (value or "").strip().lower()
+    if value.startswith("["):                       # [::1]:47800
+        return value[1:value.find("]")] if "]" in value else ""
+    if value.count(":") == 1:
+        value = value.split(":", 1)[0]
+    return value
+
+
+def _host_port(value):
+    value = (value or "").strip()
+    tail = value.rsplit("]", 1)[-1] if value.startswith("[") else value
+    if tail.count(":") == 1:
+        try:
+            return int(tail.rsplit(":", 1)[1])
+        except ValueError:
+            return -1
+    return None
+
+
+def host_allowed(host, port):
+    """Is this Host header one of ours? Numeric addresses, localhost and
+    this computer's own name are fine; any other domain name is what a DNS
+    rebinding attack would send, so it's refused."""
+    name = _host_name(host)
+    if not name or _host_port(host) not in (None, port):
+        return False
+    if name in ("localhost", "localhost."):
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    own = socket.gethostname().lower()
+    return name in (own, own + ".local", own + ".local.",
+                    own.split(".")[0], own.split(".")[0] + ".local")
+
+
+class _BoundedServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with a cap on simultaneous connections."""
+    daemon_threads = True
+    request_queue_size = 16
+
+    def __init__(self, *args, **kwargs):
+        self._slots = threading.BoundedSemaphore(API_MAX_CLIENTS)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)          # too busy: drop it
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 class ControlAPI:
-    def __init__(self, port, lan=False):
+    def __init__(self, port, lan=False, key=None):
         self.port = port
         self.lan = lan
+        self.key = key or ""          # needed by other computers (LAN mode)
         self.live = None              # callable -> fresh clock values
         self.logo = None              # callable -> overlay logo file path
-        self.queue = queue.Queue()
+        self.queue = queue.Queue(maxsize=API_MAX_QUEUE)
         self.state = {"app": APP_NAME, "version": VERSION}
         self.server = None
         self.error = None
@@ -4578,16 +4841,25 @@ class ControlAPI:
         if port is None:              # remote control switched off
             return
         try:
-            self.server = ThreadingHTTPServer(
+            self.server = _BoundedServer(
                 ("0.0.0.0" if lan else "127.0.0.1", port), self._handler())
-            self.server.daemon_threads = True
             threading.Thread(target=self.server.serve_forever,
                              daemon=True).start()
         except OSError as exc:
             self.error = str(exc)
 
+    def submit(self, cmd):
+        """Queue a command for the GUI; False (dropped) if it's flooded."""
+        try:
+            self.queue.put_nowait(cmd)
+            return True
+        except queue.Full:
+            return False
+
     def _handler(api):  # noqa: N805
         class Handler(BaseHTTPRequestHandler):
+            timeout = API_SOCKET_TIMEOUT      # idle / stalled connections
+
             def log_message(self, *args):
                 pass
 
@@ -4597,7 +4869,7 @@ class ControlAPI:
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -4610,14 +4882,58 @@ class ControlAPI:
                 self.send_response(200)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _body(self):
+                """The request body as JSON, size-checked BEFORE reading."""
+                lengths = self.headers.get_all("Content-Length") or []
+                if len(lengths) > 1 or (lengths and
+                                        not lengths[0].strip().isdigit()):
+                    raise ValueError("bad length")
+                n = int(lengths[0]) if lengths else 0
+                if n > API_MAX_BODY:
+                    raise OverflowError
+                data = json.loads(self.rfile.read(n) or b"{}")
+                if not isinstance(data, dict):
+                    raise ValueError("not an object")
+                return data
+
+            def _allowed(self, local):
+                """Host / Origin / key checks for every request."""
+                if not host_allowed(self.headers.get("Host"), api.port):
+                    return 403, "unknown Host"
+                origin = self.headers.get("Origin")
+                if origin is not None:
+                    o = urlparse(origin)
+                    if o.scheme != "http" or not host_allowed(o.netloc,
+                                                              api.port) \
+                            or (o.port or 80) != api.port:
+                        return 403, "cross-site request"
+                if not local:
+                    query = parse_qs(urlparse(self.path).query)
+                    given = (query.get("key") or [""])[0] or \
+                        self.headers.get("X-DA-Key", "")
+                    if not api.key or not secrets.compare_digest(
+                            given.encode(), api.key.encode()):
+                        return 403, "overlay key needed"
+                return None
+
             def _route(self):
                 path = urlparse(self.path).path.rstrip("/")
-                local = self.client_address[0] in ("127.0.0.1", "::1")
+                local = self.client_address[0] in ("127.0.0.1", "::1",
+                                                   "::ffff:127.0.0.1")
+                refused = self._allowed(local)
+                if refused:
+                    return self._send(refused[0],
+                                      {"ok": False, "error": refused[1]})
+                post = self.command == "POST"
+                if path.startswith("/api/") and path not in (
+                        "/api/state",) and not post:
+                    return self._send(405, {"ok": False,
+                                            "error": "use POST"})
                 if path in ("", "/api", "/api/state"):
                     api.last_seen = time.monotonic()
                     state = dict(api.state)
@@ -4649,15 +4965,17 @@ class ControlAPI:
                         return self._send(403, {"ok": False, "error":
                                                 "local, with X-DA-Timer"})
                     try:
-                        n = int(self.headers.get("Content-Length") or 0)
-                        data = json.loads(self.rfile.read(n) or b"{}")
-                        if not isinstance(data, dict):
-                            raise ValueError
-                    except ValueError:
+                        data = self._body()
+                    except OverflowError:
+                        return self._send(413, {"ok": False,
+                                                "error": "too big"})
+                    except (ValueError, OSError):
                         return self._send(400, {"ok": False,
                                                 "error": "send JSON like "
                                                 '{"text": "WRAP UP"}'})
-                    api.queue.put(("message", data))
+                    if not api.submit(("message", data)):
+                        return self._send(503, {"ok": False,
+                                                "error": "busy"})
                     return self._send(200, {"ok": True})
                 if path.startswith("/api/action/"):
                     if not local:            # other computers: view only
@@ -4672,7 +4990,9 @@ class ControlAPI:
                                                 "error": "unknown command",
                                                 "commands": sorted(API_COMMANDS)})
                     api.last_seen = time.monotonic()
-                    api.queue.put(cmd)
+                    if not api.submit(cmd):
+                        return self._send(503, {"ok": False,
+                                                "error": "busy"})
                     return self._send(200, {"ok": True, "queued": cmd})
                 return self._send(404, {"ok": False, "error": "not found"})
 
@@ -4693,6 +5013,9 @@ class DATimerApp:
         self.root = root
         init_fonts(root)
         self.settings = load_settings()
+        # Crash recovery is read FIRST, before any autosave can run, and the
+        # file is left alone until the "restore?" question is answered.
+        self._pending_restore = self._read_recovery()
         self.show = Stopwatch()
         self.segment = Stopwatch()
         self.segment_times = [0.0]   # one entry per segment; last = current
@@ -4766,7 +5089,8 @@ class DATimerApp:
         root.after(700, self._offer_restore)
         self.api = ControlAPI(int(self.settings.get("api_port", API_PORT))
                               if self.feat("api") else None,
-                              lan=self.feat("overlay_lan"))
+                              lan=self.feat("overlay_lan"),
+                              key=self._overlay_key())
         self.api.live = self._live_clock
         self.api.logo = lambda: logo_path(
             overlay_config(self.current_show).get("logo"))
@@ -4969,6 +5293,11 @@ class DATimerApp:
         self.tool_divs = [tk.Frame(r, bg=BORDER) for _ in self.tool_groups[1:]]
         self.deck_pill = Pill(r, page_bg=SURFACE, height=30, font_px=14)
         self.sync_pill = Pill(r, page_bg=SURFACE, height=30, font_px=14)
+        # shown only when a file couldn't be saved or loaded; click = details
+        self.save_pill = Pill(r, page_bg=SURFACE, height=30, font_px=14)
+        self.save_pill.configure(cursor="hand2")
+        self.save_pill.bind("<Button-1>", lambda e: self.show_problems())
+        self._problems_seen = 0
         self.status_lbl = tk.Label(r, bg=SURFACE, fg=FAINT, anchor="e",
                                    font=(UI_FONT, 10),
                                    text=f"v{VERSION}")
@@ -5383,9 +5712,11 @@ class DATimerApp:
             return
         right, cy, left_limit = anchor
         x = right
-        for w in (self.status_lbl, self.sync_pill, self.deck_pill):
+        for w in (self.status_lbl, self.save_pill, self.sync_pill,
+                  self.deck_pill):
             if (w is self.sync_pill and not self.feat("sync")) or \
-                    (w is self.deck_pill and not self.feat("deck")):
+                    (w is self.deck_pill and not self.feat("deck")) or \
+                    (w is self.save_pill and not self._problem_pill()):
                 w.place_forget()
                 continue
             if w is self.status_lbl:
@@ -5507,6 +5838,9 @@ class DATimerApp:
             d = target - cur
         elif int(e + d) < int(e):
             return                    # would tick backwards - wait instead
+        if e + d < 0:
+            return                    # just started: never below zero, line
+                                      # up a moment later instead
         sw.started_at -= d
 
     def _lock_phase(self):
@@ -5742,7 +6076,7 @@ class DATimerApp:
     def _out_seg_clock(self, show=None):
         """The output's segment clock: counting up, or down to the goal and
         then up again in red once it's over."""
-        show = show or self.current_show
+        show = show or self._out_show()
         el = self.segment.elapsed()
         goal = self._goal(len(self.segment_times))
         if output_row(show, "seg_time").get("count") != "down" or not goal:
@@ -5754,7 +6088,7 @@ class DATimerApp:
 
     def output_values(self, show=None):
         """Live values for an output view showing `show`."""
-        show = show or self.current_show
+        show = show or self._out_show()
         status, col = self._out_status
         clock = output_row(show, "clock")
         mode = (clock.get("mode") or "tod") if clock.get("show") else "off"
@@ -5771,10 +6105,19 @@ class DATimerApp:
                 self._out_seg_caption(show), ccap, ctext, ocol)
 
     def preview_output_show(self, show):
-        """Show a layout being edited on the real output, live."""
-        if self.output is not None and \
-                show.get("name") == self.current_show.get("name"):
-            self.output.apply_show(show)
+        """Show a layout being edited on the real output, live - its layout
+        AND its numbers (count up / down, clock on / off) come from the
+        edited copy until the editor closes."""
+        if show.get("name") == self.current_show.get("name"):
+            self._out_override = show
+            if self.output is not None:
+                self.output.apply_show(show)
+
+    def end_output_preview(self):
+        self._out_override = None
+
+    def _out_show(self):
+        return getattr(self, "_out_override", None) or self.current_show
 
     def open_overlay_help(self):
         OverlayDialog(self.root, self)
@@ -5792,7 +6135,7 @@ class DATimerApp:
         OutputLayoutEditor(self.root, self, self.current_show, done)
 
     def _out_seg_caption(self, show=None):
-        show = show or self.current_show
+        show = show or self._out_show()
         label = show["segment_label"].upper()
         prog = self._seg_progress()
         if not output_row(show, "seg_title").get("segments_left") or not prog:
@@ -5804,7 +6147,7 @@ class DATimerApp:
 
     def _out_clock(self):
         """(caption, time text) for the output's clock band."""
-        row = output_row(self.current_show, "clock")
+        row = output_row(self._out_show(), "clock")
         mode = (row.get("mode") or "tod") if row.get("show") else "off"
         if mode == "off":
             return "", ""
@@ -6180,7 +6523,7 @@ class DATimerApp:
         api = getattr(self, "api", None)
         if api is None:
             return
-        while True:
+        for _ in range(20):          # a budget: never starve the clocks
             try:
                 cmd = api.queue.get_nowait()
             except queue.Empty:
@@ -6425,6 +6768,16 @@ class DATimerApp:
         FontDialog(self.root, self)
 
     # ----------------------------------------------------------- settings --
+    def _overlay_key(self):
+        """Random per-install key that other computers need to view the
+        overlay / state in LAN mode (part of the address DA Timer shows)."""
+        key = self.settings.get("overlay_key")
+        if not isinstance(key, str) or len(key) < 12:
+            key = secrets.token_urlsafe(12)
+            self.settings["overlay_key"] = key
+            save_settings(self.settings)
+        return key
+
     def feat(self, key):
         return bool(self.settings.get("features", {}).get(
             key, FEATURE_DEFAULTS.get(key, True)))
@@ -6477,18 +6830,30 @@ class DATimerApp:
             "show": (self.show.base, self.show.started_at),
             "seg": (self.segment.base, self.segment.started_at),
             "segment_times": list(self.segment_times),
-            "log": [dict(e) for e in self.log.entries],
             "log_segments": json.loads(json.dumps(self.log.segments)),
             "log_dirty": self.log.dirty,
         }
         before = self._state_sig()
+        for e in self.log.entries:
+            e.setdefault("id", secrets.token_hex(6))
+        log_before = [dict(e) for e in self.log.entries]
         self._in_action = True
         try:
             result = fn(*args, **kwargs)
         finally:
             self._in_action = False
         if self._state_sig() != before:
-            snap["after_count"] = len(self.log.entries)
+            # Remember only what THIS action did to the log (by entry id),
+            # so undoing it never overwrites edits made afterwards.
+            for e in self.log.entries:
+                e.setdefault("id", secrets.token_hex(6))
+            old = {e["id"]: e for e in log_before}
+            new = {e["id"]: dict(e) for e in self.log.entries}
+            snap["log_added"] = [i for i in new if i not in old]
+            snap["log_removed"] = [(n, e) for n, e in enumerate(log_before)
+                                   if e["id"] not in new]
+            snap["log_changed"] = {i: (old[i], new[i]) for i in new
+                                   if i in old and old[i] != new[i]}
             self._undo_stack.append(snap)
             del self._undo_stack[:-self.UNDO_DEPTH]
             self._update_undo_button()
@@ -6507,15 +6872,12 @@ class DATimerApp:
             self._show_toast("Nothing to undo.", undo=False)
             return
         snap = self._undo_stack.pop()
-        # entries logged after the action are kept
-        later = self.log.entries[snap["after_count"]:] \
-            if snap["after_count"] <= len(self.log.entries) else []
         # monotonic start times make the clocks carry on as if the action
         # never happened, including the time since
         self.show.base, self.show.started_at = snap["show"]
         self.segment.base, self.segment.started_at = snap["seg"]
         self.segment_times = list(snap["segment_times"])
-        self.log.entries = snap["log"] + later
+        self.log.entries = undo_log_changes(self.log.entries, snap)
         self.log.segments = snap["log_segments"]
         self.log.dirty = True
         self.log.save_backup()
@@ -6575,42 +6937,60 @@ class DATimerApp:
     def _state_file(self):
         return os.path.join(data_dir(), "show_state.json")
 
+    def _read_recovery(self):
+        data = load_json(self._state_file(), "Crash recovery")
+        try:
+            float(data["saved_wall"])
+            float(data["show"]["elapsed"])
+            float(data["seg"]["elapsed"])
+            return data
+        except (TypeError, KeyError, ValueError):
+            return None
+
+    def _remove_recovery(self):
+        try:
+            os.remove(self._state_file())
+        except OSError:
+            pass
+
     def _save_show_state(self):
+        if getattr(self, "_pending_restore", None) is not None:
+            return                  # waiting for the "restore?" answer
         if not self.feat("autosave"):
-            try:
-                os.remove(self._state_file())
-            except OSError:
-                pass
+            self._remove_recovery()
             return
         active = self.show.elapsed() >= 1 or self.segment.elapsed() >= 1 or \
             len(self.segment_times) > 1
-        try:
-            if not active:
-                if os.path.exists(self._state_file()):
-                    os.remove(self._state_file())
-                return
-            data = {"saved_wall": time.time(),
-                    "show_name": self.current_show["name"],
-                    "show": {"elapsed": self.show.elapsed(),
-                             "running": self.show.running},
-                    "seg": {"elapsed": self.segment.elapsed(),
-                            "running": self.segment.running},
-                    "segment_times": self.segment_times}
-            tmp = self._state_file() + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-            os.replace(tmp, self._state_file())
-        except Exception:
-            pass
+        if not active:
+            # nothing worth restoring (after a reset or a fresh start once
+            # the restore question has been answered)
+            if os.path.exists(self._state_file()):
+                self._remove_recovery()
+            return
+        data = {"saved_wall": time.time(),
+                "show_name": self.current_show["name"],
+                "show": {"elapsed": self.show.elapsed(),
+                         "running": self.show.running},
+                "seg": {"elapsed": self.segment.elapsed(),
+                        "running": self.segment.running},
+                "segment_times": self.segment_times}
+        save_json(self._state_file(), data, "Crash recovery")
 
     def _offer_restore(self):
         """After a crash / accidental exit: offer the timers, then the log."""
-        try:
-            with open(self._state_file(), encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
+        data, self._pending_restore = self._pending_restore, None
+        if data is None:
+            pass
+        elif self.running or self.show.elapsed() >= 1:
+            # the operator already started a new show before we could ask:
+            # keep the old file aside rather than lose it
+            try:
+                os.replace(self._state_file(),
+                           self._state_file() + ".previous")
+            except OSError:
+                pass
             data = None
-        if data and not self.running and self.show.elapsed() < 1:
+        if data:
             gap = max(0.0, time.time() - data["saved_wall"])
             sh, sg = data["show"], data["seg"]
             prog_now = sh["elapsed"] + (gap if sh["running"] else 0)
@@ -6635,10 +7015,8 @@ class DATimerApp:
                     "RESTORE", f"Timers restored after DA Timer closed "
                                f"({fmt(gap)} gap)"))
             else:
-                try:
-                    os.remove(self._state_file())
-                except OSError:
-                    pass
+                self._remove_recovery()
+            self._save_show_state()
         self._offer_log_restore()
 
     # ---------------------------------------------------------- back-time --
@@ -6693,6 +7071,8 @@ class DATimerApp:
             proj_cap = "PROJECTED LENGTH"
             for i in range(n, len(goals)):
                 start_by[i] = fmt(max(trt - sum(goals[i:]), 0))
+        # whole seconds, so the app, deck and overlay all show the same
+        to_out, remaining = math.floor(to_out), whole(remaining)
         slack = to_out - remaining           # + spare time, - must cut
         if to_out < 0:
             state, verdict = "past", f"PAST OUT +{fmt_short(-to_out)}"
@@ -6779,7 +7159,7 @@ class DATimerApp:
             return
         self.deck = da_deck.DeckController(
             get_state=lambda: self.api.state,
-            send_command=self.api.queue.put,
+            send_command=self.api.submit,
             get_layout=self._deck_layout,
             get_brightness=lambda: int(self.settings.get("deck_brightness", 70)))
 
@@ -6809,7 +7189,10 @@ class DATimerApp:
     def _update_deck_status(self):
         api = self.api
         deck = self.deck
-        if deck is not None and deck.connected:
+        if deck is not None and deck.connected and deck.elgato_running:
+            # both apps driving the same keys: warn (Mac and Windows)
+            d = ("Quit Elgato app", AMBER_DIM, AMBER)
+        elif deck is not None and deck.connected:
             d = ("Stream Deck", GREEN_DIM, GREEN)
         elif deck is not None and deck.elgato_running and \
                 time.monotonic() - api.last_seen >= 3:
@@ -6830,12 +7213,36 @@ class DATimerApp:
                  "warn": (f"{name} freewheel" if clk.mode == "ltc"
                           else f"{name} checking", AMBER_DIM, AMBER),
                  "error": (f"{name} lost", RED_DIM, "#ff8592")}[clk.state]
-        key = (d, t)
+        p = self._problem_pill()
+        key = (d, t, p)
         if getattr(self, "_deck_status_cache", None) != key:
             self._deck_status_cache = key
             self.deck_pill.set(*d)
             self.sync_pill.set(*t)
+            if p:
+                self.save_pill.set(*p)
             self._place_status()
+
+    def _problem_pill(self):
+        if _FAILING:                            # a save is failing right now
+            since = datetime.fromtimestamp(min(_FAILING.values()))
+            return (f"Not saved since {since:%H:%M}", RED_DIM, "#ff8592")
+        if len(PROBLEMS) > self._problems_seen:
+            return ("File problem – click", AMBER_DIM, AMBER)
+        return None
+
+    def show_problems(self):
+        lines = [f"{p['when']}  {p['what']}: couldn't {p['kind']} – "
+                 f"{p['error']}" for p in PROBLEMS[-8:]]
+        self._problems_seen = len(PROBLEMS)
+        self._deck_status_cache = None
+        messagebox.showwarning(
+            APP_NAME, "DA Timer had trouble with its files:\n\n"
+            + "\n".join(lines or ["(nothing new)"])
+            + f"\n\nData folder: {data_dir()}\n\nCheck the disk isn't full "
+              "and that antivirus / OneDrive isn't locking that folder. "
+              "Damaged files are kept with '.damaged' in the name.",
+            parent=self.root)
 
     # ------------------------------------------------------------- shows --
     def apply_show(self):
@@ -6917,13 +7324,17 @@ class DATimerApp:
             APP_NAME, "Name for the copy:", parent=self.root,
             initialvalue=f"{self.current_show['name']} copy")
         if name and name.strip():
-            if name.strip() in list_shows() and not messagebox.askyesno(
-                    APP_NAME, f"Replace the existing show '{name.strip()}'?",
+            clash = find_show(name.strip())   # same FILE, e.g. News.Live
+            if clash and not messagebox.askyesno(
+                    APP_NAME, f"Replace the existing show '{clash}'?"
+                    + (f"\n('{name.strip()}' and '{clash}' would be saved "
+                       f"as the same file.)" if clash != name.strip() else ""),
                     parent=self.root):
                 return
-            show = dict(self.current_show, name=name.strip())
-            save_show(show)
-            self.use_show(show)
+            show = copy_show(self.current_show)
+            show["name"] = name.strip()
+            if save_show(show):
+                self.use_show(show)
 
     def delete_current_show(self):
         name = self.current_show["name"]

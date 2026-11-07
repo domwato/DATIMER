@@ -1,0 +1,9 @@
+# Keeps the pinned GitHub Actions (exact commits) current with reviewable
+# pull requests, one update at a time. Python packages are pinned with
+# hashes in requirements*.txt and updated by hand (see requirements/*.in).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

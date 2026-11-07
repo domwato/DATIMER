@@ -17,6 +17,11 @@ REM Install Pillow (logos/buttons/Stream Deck), openpyxl (Excel log export)
 REM and numpy + sounddevice (LTC timecode input) if missing
 %PY% -c "import PIL, openpyxl, numpy, sounddevice" 2>nul || (
   echo Installing what DA Timer needs - one time only...
-  %PY% -m pip install --quiet pillow openpyxl numpy sounddevice
+  REM exact, hash-checked versions from requirements.txt
+  %PY% -m pip install --quiet --require-hashes -r requirements.txt || (
+    echo Couldn't install DA Timer's parts - see above. Python 3.12 is recommended.
+    pause
+    exit /b 1
+  )
 )
 start "" %PYW% da_timer.py

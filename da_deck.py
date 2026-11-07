@@ -144,12 +144,14 @@ def _font(px, clock=False):
 
 
 def short(sec):
-    sec = abs(int(round(sec or 0)))
+    # same rule as the app: whole seconds, fraction dropped (2.5 -> 00:02)
+    sec = int(abs(sec or 0))
     h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
 def signed(sec):
+    sec = int(sec or 0)               # sign from the whole seconds too
     return ("+" if sec > 0 else "\u2212" if sec < 0 else "") + short(sec)
 
 
@@ -424,16 +426,25 @@ def load_library():
 
 
 def elgato_app_running():
-    if sys.platform != "win32":
-        return False
+    """Is Elgato's own Stream Deck app running? (Both apps driving the deck
+    at once fight over the keys.) Windows: StreamDeck.exe. Mac: the
+    "Stream Deck" process inside "Elgato Stream Deck.app"."""
     try:
-        out = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq StreamDeck.exe", "/NH"],
-            capture_output=True, text=True, timeout=5,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
-        return "streamdeck.exe" in out.lower()
+        if sys.platform == "win32":
+            out = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq StreamDeck.exe", "/NH"],
+                capture_output=True, text=True, timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+            return "streamdeck.exe" in out.lower()
+        if sys.platform == "darwin":
+            for args in (["pgrep", "-x", "Stream Deck"],
+                         ["pgrep", "-f", "Elgato Stream Deck.app/Contents/MacOS"]):
+                if subprocess.run(args, capture_output=True,
+                                  timeout=5).returncode == 0:
+                    return True
     except Exception:
-        return False
+        pass
+    return False
 
 
 # ------------------------------------------------------------------ controller

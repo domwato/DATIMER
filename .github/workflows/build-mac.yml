@@ -1,6 +1,6 @@
 # Builds the Mac version of DA Timer on GitHub's Mac machines.
-# Push this folder to a GitHub repo, then: Actions tab -> "Test build: Mac"
-# -> Run workflow. Download the zips from the finished run's "Artifacts".
+# Actions tab -> "Test build: Mac" -> Run workflow. Download the zips from
+# the finished run's "Artifacts".
 name: "Test build: Mac"
 
 on:
@@ -15,8 +15,10 @@ on:
   release:
     types: [published]       # publishing a release builds and attaches the apps
 
+# Read-only by default; actions pinned to exact commits, Python packages to
+# exact versions and hashes (requirements-build.txt).
 permissions:
-  contents: write          # lets a version tag publish a release
+  contents: read
 
 jobs:
   build:
@@ -28,19 +30,24 @@ jobs:
           - runner: macos-15-intel    # older Intel Macs
             arch: intel
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: "3.12"
 
-      - name: Install build tools
+      - name: Install build tools (pinned, hash-checked)
         run: |
           brew install hidapi
           cp "$(brew --prefix hidapi)/lib/libhidapi.dylib" ./libhidapi.dylib
-          python -m pip install --upgrade pip
-          python -m pip install pyinstaller pillow openpyxl numpy sounddevice pyobjc-framework-Cocoa
+          echo "hidapi from Homebrew: $(brew list --versions hidapi)"
+          shasum -a 256 libhidapi.dylib
+          python -m pip install --require-hashes -r requirements-build.txt
 
       - name: Check tkinter works
         run: python -c "import tkinter; print('Tk', tkinter.TkVersion)"
@@ -59,7 +66,9 @@ jobs:
             echo "DA Timer is running - good"
             curl -sf http://127.0.0.1:47800/overlay | grep -q "DA Timer overlay" || { echo "overlay page missing"; kill $PID; exit 1; }
             curl -sf http://127.0.0.1:47800/api/state | grep -q '"live"' || { echo "live data missing"; kill $PID; exit 1; }
-            echo "Overlay page and live data served - good"; kill $PID
+            code=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: evil.example:47800" http://127.0.0.1:47800/api/state)
+            [ "$code" = "403" ] || { echo "foreign Host header was not refused ($code)"; kill $PID; exit 1; }
+            echo "Overlay page and live data served, foreign Host refused - good"; kill $PID
           else
             echo "DA Timer quit or crashed on start"; exit 1
           fi
@@ -69,18 +78,44 @@ jobs:
         run: |
           cd dist
           ditto -c -k --sequesterRsrc --keepParent "DA Timer.app" "DA-Timer-mac-${{ matrix.arch }}.zip"
+          shasum -a 256 "DA-Timer-mac-${{ matrix.arch }}.zip" > "DA-Timer-mac-${{ matrix.arch }}.zip.sha256"
+          cat "DA-Timer-mac-${{ matrix.arch }}.zip.sha256"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: DA-Timer-mac-${{ matrix.arch }}
-          path: dist/DA-Timer-mac-${{ matrix.arch }}.zip
+          path: |
+            dist/DA-Timer-mac-${{ matrix.arch }}.zip
+            dist/DA-Timer-mac-${{ matrix.arch }}.zip.sha256
+
+  # Only this small job can write to the repo: it attaches the finished
+  # zips (with checksums and a signed build attestation) to the release.
+  attach:
+    needs: build
+    if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # upload release assets
+      id-token: write          # sign the build attestation
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5.0.0
+        with:
+          pattern: DA-Timer-mac-*
+          merge-multiple: true
+          path: out
+
+      - name: Attest the build (users can check it with "gh attestation verify")
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f  # v3.2.0
+        with:
+          subject-path: out/*.zip
 
       - name: Attach to the release
-        if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" --title "DA Timer $TAG" --notes-file RELEASE_NOTES.md || true
-          gh release upload "$TAG" "dist/DA-Timer-mac-${{ matrix.arch }}.zip" --clobber
+          gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$REPO" --title "DA Timer $TAG" --generate-notes || true
+          gh release upload "$TAG" --repo "$REPO" out/*.zip out/*.sha256 --clobber

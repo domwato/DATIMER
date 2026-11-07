@@ -1,0 +1,28 @@
+# Headless logic tests on Windows and Mac (their disks ignore upper/lower
+# case, which is where the show-rename bug lived). Runs on every push.
+name: Logic tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --require-hashes -r requirements-dev.txt
+      - run: python -m pytest -q

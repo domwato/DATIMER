@@ -5,7 +5,8 @@ cd /d "%~dp0"
 set PY=
 py -3 -c "import sys" >nul 2>&1 && set "PY=py -3"
 if not defined PY set "PY=python"
-%PY% -m pip install --upgrade pyinstaller pillow openpyxl numpy sounddevice
+REM Exact, hash-checked versions (see requirements-build.txt)
+%PY% -m pip install --require-hashes -r requirements-build.txt || (echo Install failed - see above. & pause & exit /b 1)
 %PY% -m PyInstaller --noconfirm --onefile --windowed --name DA_Timer --icon stopwatch.ico ^
   --version-file version_info.txt ^
   --add-data "stopwatch.ico;." ^

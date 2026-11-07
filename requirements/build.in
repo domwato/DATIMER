@@ -1,0 +1,4 @@
+# Building the Windows / Mac apps. Pinned + hashed copy: requirements-build.txt
+#   uv pip compile requirements/build.in --universal --generate-hashes --python-version 3.12 -o requirements-build.txt
+-r app.in
+pyinstaller

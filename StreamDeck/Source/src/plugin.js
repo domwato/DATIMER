@@ -32,7 +32,20 @@ ws.on("open", () => {
   send({ event: args.registerEvent, uuid: args.pluginUUID });
   send({ event: "getGlobalSettings", context: args.pluginUUID });
 });
-ws.on("close", () => process.exit(0));
+ws.on("close", () => {
+  for (const c of contexts.values()) cancelHold(c);
+  process.exit(0);
+});
+
+// A Reset hold only counts while that exact key is still held down and on
+// screen: changing page / profile, or the key being replaced, cancels it.
+function cancelHold(c) {
+  if (!c) return;
+  clearTimeout(c.holdTimer);
+  c.holdTimer = null;
+  c.holding = false;
+  c.held = false;
+}
 
 ws.on("message", (raw) => {
   let m;
@@ -45,6 +58,7 @@ ws.on("message", (raw) => {
   const payload = m.payload || {};
   switch (event) {
     case "willAppear":
+      cancelHold(contexts.get(context));
       contexts.set(context, {
         action: m.action.replace(PREFIX, ""),
         settings: payload.settings || {},
@@ -54,6 +68,7 @@ ws.on("message", (raw) => {
       render(context);
       break;
     case "willDisappear":
+      cancelHold(contexts.get(context));
       contexts.delete(context);
       break;
     case "didReceiveSettings": {
@@ -158,10 +173,14 @@ function onKeyDown(context) {
   if (!c) return;
   c.downAt = Date.now();
   if (c.action === "reset") {
+    cancelHold(c);
     c.holding = true;
     c.last = null;
     render(context); // show "keep holding"
     c.holdTimer = setTimeout(() => {
+      // replaced, gone or released in the meantime: do nothing
+      if (contexts.get(context) !== c || !c.holding) return;
+      c.holdTimer = null;
       c.held = true;
       command("reset_program", context).then((ok) => {
         if (ok) send({ event: "showOk", context });
@@ -180,10 +199,9 @@ function onKeyDown(context) {
 function onKeyUp(context) {
   const c = contexts.get(context);
   if (!c || c.action !== "reset") return;
-  clearTimeout(c.holdTimer);
-  if (!c.held) send({ event: "showAlert", context }); // released too early
-  c.held = false;
-  c.holding = false;
+  const fired = c.held;
+  cancelHold(c);
+  if (!fired) send({ event: "showAlert", context }); // released too early
   c.last = null;
   render(context);
 }
@@ -214,15 +232,19 @@ const C = {
   amber: "#ffb547", greenBg: "#0d3a24", redBg: "#3a1419", cyanBg: "#073a40",
 };
 
+// same rule as the app: whole seconds, fraction dropped (2.5 -> 00:02)
 function short(sec) {
-  sec = Math.abs(Math.round(sec || 0));
+  sec = Math.floor(Math.abs(sec || 0));
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
   const p = (n) => String(n).padStart(2, "0");
   return h ? `${h}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`;
 }
-const signed = (sec) => (sec > 0 ? "+" : sec < 0 ? "−" : "") + short(sec);
+const signed = (sec) => {
+  sec = Math.trunc(sec || 0); // sign from the whole seconds too
+  return (sec > 0 ? "+" : sec < 0 ? "−" : "") + short(sec);
+};
 
 function esc(t) {
   return String(t).replace(/[&<>"']/g, (ch) => ({

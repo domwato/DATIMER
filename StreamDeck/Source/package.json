@@ -5,14 +5,17 @@
   "main": "index.js",
   "scripts": {
     "build": "esbuild src/plugin.js --bundle --platform=node --target=node20 --format=cjs --outfile=io.github.domwato.datimer.sdPlugin/bin/plugin.js",
-    "pack": "npm run build && streamdeck pack io.github.domwato.datimer.sdPlugin --output dist --force"
+    "pack": "npm run build && streamdeck pack io.github.domwato.datimer.sdPlugin --output dist --force",
+    "ci-build": "npm ci && npm run build"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@elgato/cli": "^1.10.2",
-    "esbuild": "^0.28.2",
-    "ws": "^8.22.0"
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@elgato/cli": "1.10.2",
+    "esbuild": "0.28.2"
   }
 }

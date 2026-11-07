@@ -15,18 +15,22 @@ on:
         required: false
         type: string
 
+# Read-only by default; each job asks only for what it needs.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write          # create the tag and release
     outputs:
       tag: ${{ steps.v.outputs.tag }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Check the version
         id: v
@@ -64,18 +68,28 @@ jobs:
             echo "The downloads appear below about 5 minutes after the release is published."
             echo
             echo "The apps aren't signed, so the first time you open them: on Windows click \"More info\" then \"Run anyway\"; on a Mac go to System Settings → Privacy & Security → **Open Anyway**."
+            echo
+            echo "**Only download DA Timer from this page.** To check a download is the genuine build, compare its SHA-256 with the matching \`.sha256\` file below, or run \`gh attestation verify <zip> --repo $GITHUB_REPOSITORY\`."
           } > notes.md
           gh release create "$TAG" --target "$GITHUB_SHA" --title "DA Timer $TAG" \
             --notes-file notes.md --generate-notes
 
   windows:
     needs: release
+    permissions:
+      contents: write          # the build's attach job uploads to the release
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build-windows.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
 
   mac:
     needs: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build-mac.yml
     with:
       tag: ${{ needs.release.outputs.tag }}

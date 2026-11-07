@@ -11,6 +11,7 @@ Everything in DA Timer that shows or stamps a time of day (TOD clock, log,
 back-timing, Stream Deck, Excel export) asks TimeSource.now().
 LTC needs numpy + sounddevice (pip install numpy sounddevice).
 """
+import os
 import socket
 import struct
 import threading
@@ -20,32 +21,61 @@ from datetime import datetime, timedelta
 NTP_EPOCH = 2208988800          # seconds 1900-01-01 -> 1970-01-01
 SYNC_WORD = (0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1)   # bits 64..79
 FREEWHEEL_SECONDS = 10          # keep LTC time this long after signal loss
+DAY = 86400.0
+NTP_MAX_DELAY = 5.0             # round trips longer than this are useless
+NTP_SAMPLE_LIFE = 15 * 60       # forget NTP samples older than this (s)
+
+
+def wrapped_diff(a, b):
+    """Signed shortest difference a - b on a 24 h dial, in [-43200, 43200).
+    Used everywhere time-of-day / timecode values are compared, so a value
+    crossing midnight never looks like a 24 h jump."""
+    return (a - b + DAY / 2) % DAY - DAY / 2
 
 
 # --------------------------------------------------------------------- NTP
 def ntp_query(server, port=123, timeout=2.0):
-    """One SNTP request. Returns (offset_seconds, round_trip_seconds)."""
+    """One SNTP request. Returns (offset_seconds, round_trip_seconds).
+
+    The reply is only believed if it comes from the server we asked (a
+    connected socket), echoes back the exact transmit timestamp we sent
+    (random low bits, so a forger has to have seen our request), is a
+    server-mode, synchronised reply, and has a sensible round trip."""
     packet = bytearray(48)
     packet[0] = 0x23                          # LI=0, VN=4, mode=3 (client)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.settimeout(timeout)
-        t0 = time.time()
-        struct.pack_into("!II", packet, 40, int(t0 + NTP_EPOCH),
-                         int((t0 % 1) * 2 ** 32))
-        s.sendto(packet, (server, port))
-        data, _ = s.recvfrom(512)
-        t3 = time.time()
-    if len(data) < 48:
-        raise ValueError("short NTP reply")
-    if data[1] == 0:
-        raise ValueError("server not synchronised (stratum 0)")
+        s.connect((server, port))             # replies from anyone else are
+        t0 = time.time()                      # dropped by the OS
+        frac = (int((t0 % 1) * 2 ** 32) & 0xFFFFF000) | \
+            (int.from_bytes(os.urandom(2), "big") & 0xFFF)
+        struct.pack_into("!II", packet, 40, int(t0 + NTP_EPOCH), frac)
+        sent = bytes(packet[40:48])
+        s.send(packet)
+        deadline = time.monotonic() + timeout
+        while True:                           # skip stray / stale replies
+            data = s.recv(512)
+            t3 = time.time()
+            if len(data) >= 48 and data[24:32] == sent:
+                break
+            if time.monotonic() > deadline:
+                raise socket.timeout("no matching NTP reply")
+    li, mode = data[0] >> 6, data[0] & 0x07
+    if mode != 4:
+        raise ValueError("not an NTP server reply")
+    if li == 3 or not 1 <= data[1] <= 15:
+        raise ValueError("server not synchronised")
 
     def ts(off):
-        sec, frac = struct.unpack_from("!II", data, off)
-        return sec - NTP_EPOCH + frac / 2 ** 32
+        sec, fr = struct.unpack_from("!II", data, off)
+        return sec - NTP_EPOCH + fr / 2 ** 32
     t1, t2 = ts(32), ts(40)                   # server receive / transmit
+    if t1 <= 0 or t2 <= 0:
+        raise ValueError("empty NTP timestamps")
     offset = ((t1 - t0) + (t2 - t3)) / 2
     delay = (t3 - t0) - (t2 - t1)
+    if not 0 <= delay <= NTP_MAX_DELAY:
+        raise ValueError(f"implausible NTP round trip ({delay:.3f}s)")
     return offset, delay
 
 
@@ -181,22 +211,32 @@ class TimeSource:
         self.state = "ok"              # ok | warn | error
         self.mode = "pc"
         self._stop = threading.Event()
+        self._gen = 0                  # bumps on every reconfigure
         self._thread = None
         self._stream = None
+        self._reset_rate()
         self.configure(settings)
 
     # configuration ------------------------------------------------------
     def configure(self, settings):
         self.stop()
+        old = self._thread
+        self._gen += 1                 # results from older workers are void
         self._stop = threading.Event()
         self.mode = settings.get("time_source", "pc")
         self.ntp_server = settings.get("ntp_server", "time.windows.com")
         self.ltc_device = settings.get("ltc_device")       # name or None
         self.ltc_channel = int(settings.get("ltc_channel", 0))
         self.offset, self.ltc_offset, self.ltc_last = 0.0, None, None
+        self._reset_rate()
+        if old is not None and old.is_alive():
+            old.join(0.05)             # it will exit by itself; don't block
+        self._thread = None
         if self.mode == "ntp":
             self.status, self.state = f"NTP: contacting {self.ntp_server}…", "warn"
-            self._thread = threading.Thread(target=self._ntp_loop, daemon=True)
+            self._thread = threading.Thread(
+                target=self._ntp_loop, daemon=True,
+                args=(self._stop, self._gen, self.ntp_server))
             self._thread.start()
         elif self.mode == "ltc":
             self._start_ltc()
@@ -255,23 +295,38 @@ class TimeSource:
             self.status, self.state = "LTC lost — using PC clock", "error"
 
     # NTP -------------------------------------------------------------
-    def _ntp_loop(self):
+    def _ntp_loop(self, stop, gen, server, query=None):
+        """One worker per configuration: it owns its stop event, generation
+        and server name, and never publishes once it has been replaced."""
+        query = query or ntp_query
         good = []
-        while not self._stop.is_set():
+
+        def current():
+            return not stop.is_set() and gen == self._gen
+        while current():
             try:
-                off, delay = ntp_query(self.ntp_server)
-                good = (good + [(delay, off)])[-5:]
+                off, delay = query(server)
+                now = time.monotonic()
+                good = [g for g in good if now - g[2] < NTP_SAMPLE_LIFE]
+                good = (good + [(delay, off, now)])[-5:]
                 # use the sample with the smallest network delay
-                self.offset = min(good)[1]
-                self.status = (f"NTP {self.ntp_server}  offset "
-                               f"{self.offset:+.3f}s  delay {delay * 1000:.0f}ms")
-                self.state = "ok"
+                best = min(good)[1]
+                if not current():
+                    return
+                with self.lock:
+                    self.offset = best
+                    self.status = (f"NTP {server}  offset {best:+.3f}s  "
+                                   f"delay {delay * 1000:.0f}ms")
+                    self.state = "ok"
                 wait = 60
             except Exception as exc:
-                self.status = f"NTP {self.ntp_server}: {exc}"
-                self.state = "error" if not good else "warn"
+                if not current():
+                    return
+                with self.lock:
+                    self.status = f"NTP {server}: {exc}"
+                    self.state = "error" if not good else "warn"
                 wait = 10
-            self._stop.wait(wait)
+            stop.wait(wait)
 
     # LTC -------------------------------------------------------------
     @staticmethod
@@ -325,19 +380,35 @@ class TimeSource:
             self.status, self.state = f"LTC audio error: {exc}", "error"
             self._stream = None
 
+    def _reset_rate(self):
+        """Forget frame-rate history (new input, or signal re-acquired)."""
+        self._max_frame = 0            # top frame number of the last full second
+        self._sec_max = 0              # top frame number so far this second
+        self._last_f = None
+
     def _on_ltc_frame(self, h, m, s, f, fps_est, drop, end_pos):
-        self._max_frame = max(getattr(self, "_max_frame", 0), f)
+        if self.ltc_last is None or time.monotonic() - self.ltc_last > 0.5:
+            self._reset_rate()         # first lock, or back after a dropout
+        if self._last_f is not None and f < self._last_f:
+            self._max_frame = self._sec_max      # a second just completed
+            self._sec_max = f
+        else:
+            self._sec_max = max(self._sec_max, f)
+        self._last_f = f
         fps = nominal_fps(fps_est, drop, self._max_frame)
         # The frame's timecode labels its START; we've just received its end
         tc = h * 3600 + m * 60 + s + (f + 1) / fps
         # monotonic time at which the frame ended, from the block timing
         mono = self._block_mono - (self._block_end - end_pos) / self._sr
         off = tc - mono
-        if self.ltc_offset is None or abs(((off - self.ltc_offset + 43200)
-                                           % 86400) - 43200) > 1.0:
+        diff = None if self.ltc_offset is None else \
+            wrapped_diff(off, self.ltc_offset)
+        if diff is None or abs(diff) > 1.0:
             self.ltc_offset = off              # jump / first lock
         else:
-            self.ltc_offset += 0.1 * (off - self.ltc_offset)   # smooth jitter
+            # smooth jitter with the SAME wrapped difference, so crossing
+            # midnight (tc 86399 -> 0) is a tiny step, not -86400 s
+            self.ltc_offset += 0.1 * diff
         self.ltc_last = time.monotonic()
         self.ltc_fps = fps
         sep = ";" if drop else ":"

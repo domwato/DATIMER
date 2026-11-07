@@ -4,16 +4,17 @@
 
   Add as a browser source in OBS / vMix / Wirecast / CasparCG:
       http://127.0.0.1:47800/overlay            (on the DA Timer PC)
-      http://<DA Timer PC>:47800/overlay        (another PC - turn on
+      http://<DA Timer PC>:47800/overlay?key=... (another PC - turn on
                                                  Settings -> Video overlay
-                                                 on other computers)
+                                                 on other computers, and
+                                                 copy the address DA Timer
+                                                 shows, key included)
   Size the source 1920x1080 (any 16:9 size works). The background is
   transparent. What shows, sizes, colours, logo and position are set in
   DA Timer: Output to monitor > Design video overlay. Changes appear live.
 
   Optional settings on the end of the address override DA Timer's, e.g.
   /overlay?pos=top&bg=0.6
-      host=IP:47800   where DA Timer is (only needed for a saved copy)
       pos=top|bottom  bar position
       bg=0.0-1.0      background opacity
       scale=0.8       whole bar smaller / bigger
@@ -157,9 +158,11 @@
 (function () {
   "use strict";
   var q = new URLSearchParams(location.search);
-  var host = q.get("host") ||
-      (location.protocol === "file:" ? "127.0.0.1:47800" : "");
-  var base = host ? "http://" + host : "";
+  var base = "";                       // always served by DA Timer itself
+  var KEY = q.get("key") ? "key=" + encodeURIComponent(q.get("key")) : "";
+  function withKey(url) {
+    return KEY ? url + (url.indexOf("?") < 0 ? "?" : "&") + KEY : url;
+  }
   var URL_ITEMS = q.get("items") ? q.get("items").split(",") : null;
   var ALIAS = { title: "title", line: "seg_line", name: "seg_name",
                 seg: "seg", status: "status", prog: "prog", tod: "tod",
@@ -174,7 +177,7 @@
    ["DA Sans SemiBold", "DASans-SemiBold.ttf", 600],
    ["DA Sans Bold", "DASans-Bold.ttf", 700]].forEach(function (f) {
     try {
-      var face = new FontFace(f[0], "url(" + base + "/fonts/" + f[1] + ")",
+      var face = new FontFace(f[0], "url(" + withKey(base + "/fonts/" + f[1]) + ")",
                               { weight: String(f[2]) });
       face.load().then(function (l) { document.fonts.add(l); },
                        function () {});
@@ -190,19 +193,32 @@
   fit();
 
   // ---------------------------------------------------------------- data
-  var S = null, got = 0, okAt = 0, polling = false;
+  var S = null, got = 0, okAt = 0, polling = false, fails = 0;
+  // One poll at a time, each with a deadline, so a stalled request can
+  // never stop the overlay from trying again (backs off if DA Timer is
+  // away, back to every 120 ms as soon as it answers).
   function poll() {
     if (polling) return;
     polling = true;
-    fetch(base + "/api/state", { cache: "no-store" })
-      .then(function (r) { return r.json(); })
+    var ctl = window.AbortController ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 1500);
+    fetch(withKey(base + "/api/state"),
+          { cache: "no-store", signal: ctl ? ctl.signal : undefined })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
       .then(function (j) {
         if (j && j.live) { S = j; got = performance.now(); okAt = got; }
+        fails = 0;
       })
-      .catch(function () {})
-      .then(function () { polling = false; });
+      .catch(function () { fails = Math.min(fails + 1, 5); })
+      .then(function () {
+        clearTimeout(timer);
+        polling = false;
+        setTimeout(poll, fails ? 250 * Math.pow(2, fails - 1) : 120);
+      });
   }
-  setInterval(poll, 120);
   poll();
 
   function pad(n) { return (n < 10 ? "0" : "") + n; }
@@ -211,8 +227,9 @@
     return pad(Math.floor(t / 3600)) + ":" + pad(Math.floor(t % 3600 / 60)) +
            ":" + pad(t % 60);
   }
+  // same rule as the app: whole seconds, fraction dropped (2.5 -> 00:02)
   function short(t) {
-    t = Math.round(Math.abs(t));
+    t = Math.floor(Math.abs(t));
     if (t >= 3600) return Math.floor(t / 3600) + ":" +
                           pad(Math.floor(t % 3600 / 60)) + ":" + pad(t % 60);
     return pad(Math.floor(t / 60)) + ":" + pad(t % 60);
@@ -236,7 +253,7 @@
     else if (prop === "color") el.style.color = val;
     else if (prop === "hide") el.classList.toggle("hide", !!val);
     else if (prop === "fs") el.style.setProperty("--fs", val);
-    else if (prop === "src") { if (val) el.src = base + val; }
+    else if (prop === "src") { if (val) el.src = withKey(base + val); }
   }
   function css(name, val) {
     if (last["css" + name] === val) return;

@@ -1,0 +1,4 @@
+# Running the tests. Pinned + hashed copy: requirements-dev.txt
+#   uv pip compile requirements/dev.in --universal --generate-hashes --python-version 3.12 -o requirements-dev.txt
+-r app.in
+pytest

@@ -4,11 +4,19 @@ Stream Deck support:
 1. python-elgato-streamdeck (folder: vendor\StreamDeck)
    Copyright (c) Dean Camera. MIT License - see vendor\LICENSE.
    https://github.com/abcminiuser/python-elgato-streamdeck
+   Version: 0.10.0 from PyPI (streamdeck-0.10.0-py3-none-any.whl,
+   SHA-256 c1b9acee34c186eeb3a954cf873bbaac4b1ffda26dac12d9f7c475d89f70ef0c).
+   One local change: Transport/LibUSBHIDAPI.py loads the hidapi copy
+   bundled inside the Mac app first (marked "DA Timer:" in the file).
 
 2. HIDAPI (file: hidapi.dll, version 0.14.0, 64-bit Windows build)
    Copyright (c) Alan Ott, Signal 11 Software and the libusb/hidapi
    contributors. Used under the HIDAPI license (BSD-style option).
    https://github.com/libusb/hidapi
+   hidapi.dll SHA-256: ebeb835e2b4530ed68843f19d6a2604c51772e3c26e7f542fde194075f82d9b4
+   (the Windows build checks this before building). The Mac app takes
+   libhidapi from Homebrew at build time; the build log records its
+   version and SHA-256.
 
 3. Fonts (folder: fonts) - "DA Sans" and "DA Clock"
    Modified versions of Barlow (Copyright 2017 The Barlow Project

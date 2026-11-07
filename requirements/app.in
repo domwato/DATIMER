@@ -1,0 +1,8 @@
+# What DA Timer needs to run from source. Pinned + hashed copy: requirements.txt
+# Update deliberately, in its own commit:
+#   uv pip compile requirements/app.in --universal --generate-hashes --python-version 3.12 -o requirements.txt
+pillow
+openpyxl
+numpy
+sounddevice
+pyobjc-framework-Cocoa; sys_platform == "darwin"

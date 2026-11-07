@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "Name": "DA Timer",
-  "Version": "1.4.0.0",
+  "Version": "1.5.0.0",
   "Author": "DA Timer",
   "Description": "Control DA Timer from your Stream Deck: start/stop, next segment, marks, and live segment / program clocks with over/under.",
   "Category": "DA Timer",

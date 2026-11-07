@@ -37,6 +37,9 @@ Key actions (both ways)
 Other controllers (Bitfocus Companion, generic HTTP)
   GET  http://127.0.0.1:47800/api/state
   POST http://127.0.0.1:47800/api/action/<command>   header  X-DA-Timer: 1
+       (POST only, from the DA Timer computer. Address it as 127.0.0.1 or
+       localhost - other host names are refused. Companion's "Generic
+       HTTP" POST action with that header works.)
   Commands: all_start all_stop all_toggle seg_start seg_stop seg_toggle
             prog_start prog_stop prog_toggle next_segment mark reset_program
             dual_toggle tod_toggle log_toggle segments_toggle undo
